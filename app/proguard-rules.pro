@@ -1,0 +1,6 @@
+-keep class org.schabi.newpipe.extractor.** { *; }
+-dontwarn org.schabi.newpipe.extractor.**
+-keep class com.grack.nanojson.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**
+-keep class ru.tubek.app.data.** { *; }

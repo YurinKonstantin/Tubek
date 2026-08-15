@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Tubek" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">#FF0F0F0F</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorBackground">#FF0F0F0F</item>
+    </style>
+</resources>
