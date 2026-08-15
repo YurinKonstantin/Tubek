@@ -150,6 +150,8 @@ object YoutubeService {
 
     fun preferredLanguage(): String = preferredLanguageCode
 
+    fun preferredCountry(): String = preferredCountryCode
+
     fun rebuildProxyClients(context: Context) {
         OkHttpDownloader.getInstance(context).rebuild(context)
         OkHttpClients.rebuildDownload()

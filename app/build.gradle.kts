@@ -1,9 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun propOrEmpty(key: String): String =
+    localProperties.getProperty(key, "").orEmpty().replace("\"", "\\\"")
 
 android {
     namespace = "ru.tubek.app"
@@ -16,6 +28,13 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
+
+        buildConfigField("String", "YOUTUBE_API_KEY", "\"${propOrEmpty("youtube.api.key")}\"")
+        buildConfigField(
+            "String",
+            "YOUTUBE_OAUTH_WEB_CLIENT_ID",
+            "\"${propOrEmpty("youtube.oauth.web.client.id")}\""
+        )
     }
 
     buildTypes {
@@ -79,6 +98,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
@@ -88,6 +108,9 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3")
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
 
-    // Извлечение потоков YouTube без официального API
+    // OAuth для подписок / понравившихся
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
+
+    // Потоки воспроизведения/скачивания (Data API их не отдаёт)
     implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.26.4")
 }

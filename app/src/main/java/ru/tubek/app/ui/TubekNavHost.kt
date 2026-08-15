@@ -1,6 +1,10 @@
 package ru.tubek.app.ui
 
+import android.app.Activity
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -35,6 +40,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.launch
 import ru.tubek.app.data.DownloadRecord
 import ru.tubek.app.data.SubscriptionEntity
 import ru.tubek.app.data.WatchHistoryEntity
@@ -56,6 +62,8 @@ import ru.tubek.app.ui.viewmodel.FeedUiState
 import ru.tubek.app.ui.viewmodel.NowPlayingUiState
 import ru.tubek.app.ui.viewmodel.SearchUiState
 import ru.tubek.app.ui.viewmodel.ShortsUiState
+import ru.tubek.app.youtube.SignInPrepareResult
+import ru.tubek.app.youtube.YoutubeAuthManager
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -116,6 +124,42 @@ fun TubekNavHost(
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val scope = rememberCoroutineScope()
+    val activity = context as Activity
+
+    val signInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.completeGoogleSignIn(result.data)
+        } else {
+            Toast.makeText(context, "Вход отменён", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startGoogleSignIn() {
+        scope.launch {
+            runCatching { viewModel.prepareGoogleSignIn(activity) }
+                .onSuccess { prep ->
+                    when (prep) {
+                        is SignInPrepareResult.SignedIn ->
+                            viewModel.onGoogleSignInCompleted(prep.session.displayName)
+                        is SignInPrepareResult.NeedsUserConsent -> {
+                            signInLauncher.launch(
+                                IntentSenderRequest.Builder(prep.pendingIntent.intentSender).build()
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    Toast.makeText(
+                        context,
+                        YoutubeAuthManager.friendlyError(error),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -206,8 +250,12 @@ fun TubekNavHost(
                         rootNav.navigate(Routes.detail(url))
                     }
                 },
-                onLoginStub = {
-                    Toast.makeText(context, "Авторизация появится позже", Toast.LENGTH_SHORT).show()
+                onLoginClick = {
+                    if (authState is AuthState.SignedIn) {
+                        viewModel.signOut()
+                    } else {
+                        startGoogleSignIn()
+                    }
                 }
             )
         }
@@ -247,6 +295,7 @@ fun TubekNavHost(
             Box(modifier = Modifier.fillMaxSize()) {
                 HistoryScreen(
                     history = watchHistory,
+                    signedIn = authState is AuthState.SignedIn,
                     onBack = { rootNav.popBackStack() },
                     onOpenVideo = { item: WatchHistoryEntity ->
                         rootNav.navigate(Routes.detail(item.videoUrl))
@@ -343,7 +392,7 @@ private fun MainShell(
     onToggleNotify: (SubscriptionEntity, Boolean) -> Unit,
     onUnsubscribe: (SubscriptionEntity) -> Unit,
     onOpenChannel: (SubscriptionEntity) -> Unit,
-    onLoginStub: () -> Unit
+    onLoginClick: () -> Unit
 ) {
     val tabNav = rememberNavController()
     val tabs = listOf(
@@ -454,7 +503,7 @@ private fun MainShell(
                     onClearDownloads = onClearDownloads,
                     onOpenLegal = onOpenLegal,
                     onOpenHelp = onOpenHelp,
-                    onLoginStub = onLoginStub
+                    onLoginClick = onLoginClick
                 )
             }
         }

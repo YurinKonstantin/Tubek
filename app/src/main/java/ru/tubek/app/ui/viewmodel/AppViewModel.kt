@@ -1,5 +1,6 @@
 package ru.tubek.app.ui.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.content.ComponentName
 import android.content.Intent
@@ -7,10 +8,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.PlaybackException
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -19,9 +23,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.tubek.app.data.Countries
 import ru.tubek.app.data.CountryDetector
@@ -36,6 +40,7 @@ import ru.tubek.app.download.DownloadWorker
 import ru.tubek.app.feed.HomeFeed
 import ru.tubek.app.feed.HomeFeedMixer
 import ru.tubek.app.feed.ShortsFeedMixer
+import ru.tubek.app.network.OkHttpClients
 import ru.tubek.app.player.PlaybackService
 import ru.tubek.app.player.PlayerController
 import ru.tubek.app.proxy.CustomProxyMode
@@ -45,12 +50,14 @@ import ru.tubek.app.proxy.ProxySource
 import ru.tubek.app.proxy.ProxyStatsStore
 import ru.tubek.app.proxy.withProxyFallback
 import ru.tubek.app.youtube.PlaybackOption
+import ru.tubek.app.youtube.SignInPrepareResult
 import ru.tubek.app.youtube.StreamOption
 import ru.tubek.app.youtube.VideoDetails
 import ru.tubek.app.youtube.VideoItem
+import ru.tubek.app.youtube.YoutubeAuthManager
+import ru.tubek.app.youtube.YoutubeDataApi
 import ru.tubek.app.youtube.YoutubeRepository
 import ru.tubek.app.youtube.YoutubeService
-import androidx.media3.common.PlaybackException
 
 data class FeedUiState(
     val isLoading: Boolean = false,
@@ -138,7 +145,13 @@ sealed class AuthState {
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val preferences = PreferencesRepository(application)
-    private val repository = YoutubeRepository()
+    private val authManager = YoutubeAuthManager(application)
+    private val dataApi = YoutubeDataApi(
+        context = application,
+        clientProvider = { OkHttpClients.metadata(getApplication()) },
+        accessTokenProvider = { authManager.accessToken() }
+    )
+    private val repository = YoutubeRepository(dataApi)
     private val downloadHistory = DownloadHistoryRepository(application)
     private val subscriptionsRepo = SubscriptionRepository(application)
     private val watchHistoryRepo = WatchHistoryRepository(application)
@@ -176,13 +189,32 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val downloads: StateFlow<List<DownloadRecord>> = downloadHistory.observe()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val subscriptions: StateFlow<List<SubscriptionEntity>> = subscriptionsRepo.observeAll()
+    private val _remoteSubscriptions = MutableStateFlow<List<SubscriptionEntity>>(emptyList())
+    private val _remoteHistory = MutableStateFlow<List<WatchHistoryEntity>>(emptyList())
+    private val _authState = MutableStateFlow<AuthState>(
+        authManager.session.value?.let { AuthState.SignedIn(it.displayName) } ?: AuthState.Guest
+    )
+    val authState: StateFlow<AuthState> = _authState.asStateFlow()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val subscriptions: StateFlow<List<SubscriptionEntity>> = authState
+        .flatMapLatest { state ->
+            when (state) {
+                is AuthState.Guest -> subscriptionsRepo.observeAll()
+                is AuthState.SignedIn -> _remoteSubscriptions
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val watchHistory: StateFlow<List<WatchHistoryEntity>> = watchHistoryRepo.observeAll()
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val watchHistory: StateFlow<List<WatchHistoryEntity>> = authState
+        .flatMapLatest { state ->
+            when (state) {
+                is AuthState.Guest -> watchHistoryRepo.observeAll()
+                is AuthState.SignedIn -> _remoteHistory
+            }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val authState: StateFlow<AuthState> = MutableStateFlow(AuthState.Guest)
 
     private val _feed = MutableStateFlow(FeedUiState())
     val feed: StateFlow<FeedUiState> = _feed.asStateFlow()
@@ -357,6 +389,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _search.value = _search.value.copy(recentQueries = recent)
             }
         }
+        viewModelScope.launch {
+            authManager.session.collect { session ->
+                _authState.value = session?.let { AuthState.SignedIn(it.displayName) }
+                    ?: AuthState.Guest
+            }
+        }
+        viewModelScope.launch {
+            runCatching { authManager.restoreSilently() }
+            if (authManager.isSignedIn()) {
+                refreshRemoteLibrary()
+            }
+        }
         bindMediaSession()
     }
 
@@ -400,8 +444,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             maybeUpgradeProxyQuietly()
             runWithProxyFallback(maxTries = FEED_PROXY_TRIES) {
-                val subs = subscriptionsRepo.getAll()
-                val history = watchHistoryRepo.getRecent(20)
+                val subs = currentSubscriptions()
+                val history = currentHistoryForFeed()
                 feedMixer.build(subs, history)
             }.onSuccess { home: HomeFeed ->
                 hadSuccessfulConnection = true
@@ -450,7 +494,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             maybeUpgradeProxyQuietly()
             runWithProxyFallback(maxTries = FEED_PROXY_TRIES) {
-                val subs = subscriptionsRepo.getAll()
+                val subs = currentSubscriptions()
                 shortsFeedMixer.build(subs)
             }.onSuccess { items ->
                 hadSuccessfulConnection = true
@@ -624,8 +668,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runWithProxyFallback { repository.resolve(urlOrId, preferredAudioLanguage()) }
                 .onSuccess { details ->
                     val playback = pickPlaybackOption(details.playbackOptions)
-                    val subscribed = details.channelId?.let {
-                        subscriptionsRepo.getById(it) != null
+                    val subscribed = details.channelId?.let { channelId ->
+                        isChannelSubscribed(channelId)
                     } == true
                     val saved = watchHistoryRepo.getById(details.item.id)
                     val resumeAt = saved?.positionMs?.takeIf { pos ->
@@ -706,7 +750,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             betterConnectionAvailable = proxyPool.betterProxyOffer.value != null
         )
         viewModelScope.launch {
-            watchHistoryRepo.recordWatch(details.item, details.channelUrl)
+            // Список истории у авторизованных — с YouTube (лайки); локально только resume.
+            val existing = watchHistoryRepo.getById(details.item.id)
+            watchHistoryRepo.recordWatch(
+                details.item,
+                details.channelUrl,
+                positionMs = existing?.positionMs ?: 0L
+            )
         }
         updateProxyStatus()
     }
@@ -843,10 +893,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val channelUrl = details.channelUrl ?: return
         viewModelScope.launch {
             if (_detail.value.isSubscribed) {
-                subscriptionsRepo.unsubscribe(channelId)
+                unsubscribeChannel(channelId)
                 _detail.value = _detail.value.copy(isSubscribed = false)
             } else {
-                subscriptionsRepo.subscribe(
+                subscribeChannel(
                     channelId = channelId,
                     name = details.item.uploader,
                     channelUrl = channelUrl,
@@ -868,14 +918,190 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChannelNotify(channelId: String, enabled: Boolean) {
         viewModelScope.launch {
-            subscriptionsRepo.setNotifyEnabled(channelId, enabled)
+            if (_authState.value is AuthState.SignedIn) {
+                _remoteSubscriptions.value = _remoteSubscriptions.value.map { sub ->
+                    if (sub.channelId == channelId) sub.copy(notifyEnabled = enabled) else sub
+                }
+                // Локальный флаг уведомлений для remote-подписок
+                subscriptionsRepo.subscribe(
+                    channelId = channelId,
+                    name = _remoteSubscriptions.value.firstOrNull { it.channelId == channelId }?.name
+                        ?: channelId,
+                    channelUrl = _remoteSubscriptions.value.firstOrNull { it.channelId == channelId }?.channelUrl
+                        ?: "https://www.youtube.com/channel/$channelId",
+                    avatarUrl = _remoteSubscriptions.value.firstOrNull { it.channelId == channelId }?.avatarUrl
+                )
+                subscriptionsRepo.setNotifyEnabled(channelId, enabled)
+            } else {
+                subscriptionsRepo.setNotifyEnabled(channelId, enabled)
+            }
         }
     }
 
     fun unsubscribe(channelId: String) {
         viewModelScope.launch {
+            unsubscribeChannel(channelId)
+        }
+    }
+
+    suspend fun prepareGoogleSignIn(activity: Activity): SignInPrepareResult =
+        authManager.prepareSignIn(activity)
+
+    fun onGoogleSignInCompleted(sessionDisplayName: String) {
+        _authState.value = AuthState.SignedIn(sessionDisplayName)
+        viewModelScope.launch {
+            refreshRemoteLibrary()
+            loadFeed()
+            loadShorts()
+            notifyToast("Вы вошли как $sessionDisplayName")
+        }
+    }
+
+    fun completeGoogleSignIn(data: Intent?) {
+        viewModelScope.launch {
+            runCatching { authManager.completeSignInFromIntent(data) }
+                .onSuccess { session ->
+                    onGoogleSignInCompleted(session.displayName)
+                }
+                .onFailure { error ->
+                    notifyToast(YoutubeAuthManager.friendlyError(error))
+                }
+        }
+    }
+
+    fun signOut() {
+        authManager.signOut()
+        _authState.value = AuthState.Guest
+        _remoteSubscriptions.value = emptyList()
+        _remoteHistory.value = emptyList()
+        viewModelScope.launch {
+            loadFeed()
+            loadShorts()
+            notifyToast("Вы вышли из аккаунта")
+        }
+    }
+
+    fun clearWatchHistory() {
+        viewModelScope.launch {
+            if (_authState.value is AuthState.SignedIn) {
+                notifyToast("Понравившиеся на YouTube нельзя очистить из приложения")
+            } else {
+                watchHistoryRepo.clear()
+            }
+        }
+    }
+
+    fun deleteWatchHistoryItem(videoId: String) {
+        viewModelScope.launch {
+            if (_authState.value is AuthState.SignedIn) {
+                _remoteHistory.value = _remoteHistory.value.filter { it.videoId != videoId }
+            } else {
+                watchHistoryRepo.delete(videoId)
+            }
+        }
+    }
+
+    private suspend fun currentSubscriptions(): List<SubscriptionEntity> {
+        return if (_authState.value is AuthState.SignedIn) {
+            if (_remoteSubscriptions.value.isEmpty()) {
+                refreshRemoteSubscriptions()
+            }
+            _remoteSubscriptions.value
+        } else {
+            subscriptionsRepo.getAll()
+        }
+    }
+
+    private suspend fun currentHistoryForFeed(): List<WatchHistoryEntity> {
+        return if (_authState.value is AuthState.SignedIn) {
+            if (_remoteHistory.value.isEmpty()) {
+                refreshRemoteHistory()
+            }
+            _remoteHistory.value.take(20)
+        } else {
+            watchHistoryRepo.getRecent(20)
+        }
+    }
+
+    private suspend fun isChannelSubscribed(channelId: String): Boolean {
+        return if (_authState.value is AuthState.SignedIn) {
+            _remoteSubscriptions.value.any { it.channelId == channelId } ||
+                repository.findRemoteSubscriptionId(channelId) != null
+        } else {
+            subscriptionsRepo.getById(channelId) != null
+        }
+    }
+
+    private suspend fun subscribeChannel(
+        channelId: String,
+        name: String,
+        channelUrl: String,
+        avatarUrl: String?
+    ) {
+        if (_authState.value is AuthState.SignedIn) {
+            val remote = repository.remoteSubscribe(channelId)
+            _remoteSubscriptions.value =
+                (_remoteSubscriptions.value + remote.toEntity()).distinctBy { it.channelId }
+        } else {
+            subscriptionsRepo.subscribe(channelId, name, channelUrl, avatarUrl)
+        }
+    }
+
+    private suspend fun unsubscribeChannel(channelId: String) {
+        if (_authState.value is AuthState.SignedIn) {
+            val apiId = _remoteSubscriptions.value
+                .firstOrNull { it.channelId == channelId }
+                ?.apiSubscriptionId
+                ?: repository.findRemoteSubscriptionId(channelId)
+            if (!apiId.isNullOrBlank()) {
+                repository.remoteUnsubscribe(apiId)
+            }
+            _remoteSubscriptions.value =
+                _remoteSubscriptions.value.filter { it.channelId != channelId }
+        } else {
             subscriptionsRepo.unsubscribe(channelId)
         }
+    }
+
+    private suspend fun refreshRemoteLibrary() {
+        refreshRemoteSubscriptions()
+        refreshRemoteHistory()
+    }
+
+    private suspend fun refreshRemoteSubscriptions() {
+        runCatching { repository.listRemoteSubscriptions() }
+            .onSuccess { list ->
+                val notifyMap = subscriptionsRepo.getAll().associate { it.channelId to it.notifyEnabled }
+                _remoteSubscriptions.value = list.map { remote ->
+                    remote.toEntity(notifyEnabled = notifyMap[remote.channelId] ?: true)
+                }
+            }
+            .onFailure { error ->
+                notifyToast(humanError(error))
+            }
+    }
+
+    private suspend fun refreshRemoteHistory() {
+        runCatching { repository.likedVideos(50) }
+            .onSuccess { liked ->
+                _remoteHistory.value = liked.mapIndexed { index, item ->
+                    val local = watchHistoryRepo.getById(item.id)
+                    WatchHistoryEntity(
+                        videoId = item.id,
+                        title = item.title,
+                        uploader = item.uploader,
+                        uploaderUrl = item.uploaderUrl,
+                        thumbnailUrl = item.thumbnailUrl,
+                        videoUrl = item.url,
+                        durationSeconds = item.durationSeconds,
+                        positionMs = local?.positionMs ?: 0L,
+                        watchedAt = System.currentTimeMillis() - index
+                    )
+                }
+            }
+            .onFailure { error ->
+                notifyToast(humanError(error))
+            }
     }
 
     fun startDownload() {
@@ -916,18 +1142,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun clearDownloadHistory() {
         viewModelScope.launch {
             downloadHistory.clear()
-        }
-    }
-
-    fun clearWatchHistory() {
-        viewModelScope.launch {
-            watchHistoryRepo.clear()
-        }
-    }
-
-    fun deleteWatchHistoryItem(videoId: String) {
-        viewModelScope.launch {
-            watchHistoryRepo.delete(videoId)
         }
     }
 

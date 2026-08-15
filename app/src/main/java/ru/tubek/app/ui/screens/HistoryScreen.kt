@@ -29,6 +29,7 @@ import ru.tubek.app.youtube.VideoItem
 @Composable
 fun HistoryScreen(
     history: List<WatchHistoryEntity>,
+    signedIn: Boolean,
     onBack: () -> Unit,
     onOpenVideo: (WatchHistoryEntity) -> Unit,
     onDelete: (WatchHistoryEntity) -> Unit,
@@ -37,14 +38,19 @@ fun HistoryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("История", fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        if (signedIn) "Понравившиеся" else "История",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
                 },
                 actions = {
-                    if (history.isNotEmpty()) {
+                    if (history.isNotEmpty() && !signedIn) {
                         TextButton(onClick = onClear) { Text("Очистить") }
                     }
                 }
@@ -60,7 +66,11 @@ fun HistoryScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "История просмотров пуста",
+                    if (signedIn) {
+                        "Нет понравившихся видео на YouTube"
+                    } else {
+                        "История просмотров пуста"
+                    },
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                 )
             }
@@ -84,11 +94,13 @@ fun HistoryScreen(
                             ),
                             onClick = { onOpenVideo(item) }
                         )
-                        IconButton(
-                            onClick = { onDelete(item) },
-                            modifier = Modifier.align(Alignment.TopEnd)
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = "Удалить")
+                        if (!signedIn) {
+                            IconButton(
+                                onClick = { onDelete(item) },
+                                modifier = Modifier.align(Alignment.TopEnd)
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "Удалить")
+                            }
                         }
                     }
                 }

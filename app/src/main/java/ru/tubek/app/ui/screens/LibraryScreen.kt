@@ -57,7 +57,7 @@ fun LibraryScreen(
     onClearDownloads: () -> Unit,
     onOpenLegal: () -> Unit,
     onOpenHelp: () -> Unit,
-    onLoginStub: () -> Unit
+    onLoginClick: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -75,15 +75,18 @@ fun LibraryScreen(
                 LibraryMenuRow(
                     icon = Icons.Default.Person,
                     title = when (authState) {
-                        is AuthState.Guest -> "Войти"
+                        is AuthState.Guest -> "Войти через Google"
                         is AuthState.SignedIn -> authState.displayName
                     },
-                    subtitle = if (authState is AuthState.Guest) "Скоро: аккаунт YouTube" else null,
-                    onClick = onLoginStub
+                    subtitle = when (authState) {
+                        is AuthState.Guest -> "Подписки и понравившиеся с YouTube"
+                        is AuthState.SignedIn -> "Нажмите, чтобы выйти"
+                    },
+                    onClick = onLoginClick
                 )
                 LibraryMenuRow(
                     icon = Icons.Default.History,
-                    title = "История",
+                    title = if (authState is AuthState.SignedIn) "Понравившиеся" else "История",
                     onClick = onOpenHistory
                 )
                 LibraryMenuRow(

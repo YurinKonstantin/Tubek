@@ -1,115 +1,70 @@
 package ru.tubek.app.youtube
 
-import org.schabi.newpipe.extractor.channel.tabs.ChannelTabs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.AudioTrackType
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfo
-import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.extractor.stream.VideoStream
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.schabi.newpipe.extractor.ServiceList
+import ru.tubek.app.network.OkHttpClients
 import java.util.Locale
 import java.util.regex.Pattern
 
-class YoutubeRepository {
-
-    private val youtube = ServiceList.YouTube
-
-    suspend fun trending(): List<VideoItem> = withContext(Dispatchers.IO) {
-        val extractor = youtube.kioskList.defaultKioskExtractor
-        applyLocalization(extractor)
-        extractor.fetchPage()
-        extractor.initialPage.items
-            .filterIsInstance<StreamInfoItem>()
-            .mapNotNull { it.toVideoItem() }
-            .distinctBy { it.id }
-    }
+/**
+ * Метаданные — YouTube Data API v3; потоки плеера/скачивания — NewPipe Extractor.
+ */
+class YoutubeRepository(
+    private val dataApi: YoutubeDataApi
+) {
+    suspend fun trending(regionCode: String = YoutubeService.preferredCountry()): List<VideoItem> =
+        withContext(Dispatchers.IO) {
+            dataApi.trending(regionCode = regionCode)
+        }
 
     suspend fun search(query: String): List<VideoItem> = withContext(Dispatchers.IO) {
-        val extractor = youtube.getSearchExtractor(query.trim())
-        applyLocalization(extractor)
-        extractor.fetchPage()
-        extractor.initialPage.items
-            .filterIsInstance<StreamInfoItem>()
-            .mapNotNull { it.toVideoItem() }
-            .distinctBy { it.id }
+        dataApi.search(
+            query = query,
+            regionCode = YoutubeService.preferredCountry(),
+            language = YoutubeService.preferredLanguage()
+        )
     }
 
     suspend fun channelVideos(channelUrl: String, limit: Int = 15): List<VideoItem> =
         withContext(Dispatchers.IO) {
-            val channelExtractor = youtube.getChannelExtractor(channelUrl)
-            applyLocalization(channelExtractor)
-            channelExtractor.fetchPage()
-            val tabs = channelExtractor.tabs
-            val videosTab = tabs.firstOrNull { tab ->
-                tab.url?.contains("/videos", ignoreCase = true) == true ||
-                    tab.contentFilters.any { it.contains("video", ignoreCase = true) }
-            } ?: tabs.firstOrNull()
-
-            if (videosTab != null) {
-                val tabExtractor = youtube.getChannelTabExtractor(videosTab)
-                applyLocalization(tabExtractor)
-                tabExtractor.fetchPage()
-                val items = tabExtractor.initialPage?.items.orEmpty()
-                return@withContext items
-                    .filterIsInstance<StreamInfoItem>()
-                    .mapNotNull { it.toVideoItem() }
-                    .distinctBy { it.id }
-                    .take(limit)
-            }
-
-            emptyList()
+            dataApi.channelVideos(channelUrl, limit)
         }
 
     suspend fun channelShorts(channelUrl: String, limit: Int = 15): List<VideoItem> =
         withContext(Dispatchers.IO) {
-            val channelExtractor = youtube.getChannelExtractor(channelUrl)
-            applyLocalization(channelExtractor)
-            channelExtractor.fetchPage()
-            val shortsTab = channelExtractor.tabs.firstOrNull { tab ->
-                tab.contentFilters.any { it.equals(ChannelTabs.SHORTS, ignoreCase = true) } ||
-                    tab.url?.contains("/shorts", ignoreCase = true) == true
-            } ?: return@withContext emptyList()
-
-            val tabExtractor = youtube.getChannelTabExtractor(shortsTab)
-            applyLocalization(tabExtractor)
-            tabExtractor.fetchPage()
-            tabExtractor.initialPage?.items.orEmpty()
-                .filterIsInstance<StreamInfoItem>()
-                .filter { it.isLikelyShort() }
-                .mapNotNull { it.toVideoItem() }
-                .distinctBy { it.id }
-                .take(limit)
+            dataApi.channelShorts(channelUrl, limit)
         }
 
-    /**
-     * Лента Shorts: поиск + короткие ролики из трендов.
-     * NewPipe не даёт отдельный kiosk Shorts, поэтому собираем по признакам short-form.
-     */
     suspend fun discoverShorts(limit: Int = 40): List<VideoItem> = withContext(Dispatchers.IO) {
-        val collected = LinkedHashMap<String, VideoItem>()
-        for (query in listOf("#shorts", "shorts")) {
-            if (collected.size >= limit) break
-            val extractor = youtube.getSearchExtractor(query)
-            applyLocalization(extractor)
-            extractor.fetchPage()
-            extractor.initialPage.items
-                .filterIsInstance<StreamInfoItem>()
-                .filter { it.isLikelyShort() }
-                .mapNotNull { it.toVideoItem() }
-                .forEach { item -> collected.putIfAbsent(item.id, item) }
-        }
-        if (collected.size < limit) {
-            runCatching { trending() }.getOrDefault(emptyList())
-                .filter { item ->
-                    val duration = item.durationSeconds
-                    duration != null && duration in 1..MAX_SHORT_DURATION_SEC
-                }
-                .forEach { item -> collected.putIfAbsent(item.id, item) }
-        }
-        collected.values.take(limit)
+        dataApi.discoverShorts(
+            limit = limit,
+            regionCode = YoutubeService.preferredCountry()
+        )
+    }
+
+    suspend fun listRemoteSubscriptions(): List<RemoteSubscription> = withContext(Dispatchers.IO) {
+        dataApi.listSubscriptions()
+    }
+
+    suspend fun remoteSubscribe(channelId: String): RemoteSubscription = withContext(Dispatchers.IO) {
+        dataApi.subscribe(channelId)
+    }
+
+    suspend fun remoteUnsubscribe(apiSubscriptionId: String) = withContext(Dispatchers.IO) {
+        dataApi.unsubscribe(apiSubscriptionId)
+    }
+
+    suspend fun findRemoteSubscriptionId(channelId: String): String? = withContext(Dispatchers.IO) {
+        dataApi.findSubscriptionId(channelId)
+    }
+
+    suspend fun likedVideos(maxResults: Int = 50): List<VideoItem> = withContext(Dispatchers.IO) {
+        dataApi.likedVideos(maxResults)
     }
 
     suspend fun resolve(
@@ -117,23 +72,46 @@ class YoutubeRepository {
         preferredAudioLanguage: String = Locale.getDefault().language
     ): VideoDetails = withContext(Dispatchers.IO) {
         val url = normalizeUrl(urlOrId)
-        val extractor = youtube.getStreamExtractor(url)
-        // force* обязателен: иначе StreamingService подменяет Localization на language-only
-        // без страны → invalid_argument в Innertube.
-        applyLocalization(extractor)
+        val videoId = extractVideoId(urlOrId) ?: extractVideoId(url)
+            ?: error("Не удалось определить ID видео")
+
+        val meta = runCatching { dataApi.videoResource(videoId) }.getOrNull()
+        val related = runCatching {
+            dataApi.relatedVideos(
+                seedTitle = meta?.item?.title.orEmpty().ifBlank { videoId },
+                excludeId = videoId
+            )
+        }.getOrDefault(emptyList())
+
+        val channelAvatar = meta?.channelId?.let { id ->
+            runCatching { dataApi.channelInfo(id)?.avatarUrl }.getOrNull()
+        }
+
+        // Потоки — только NewPipe
+        val extractor = org.schabi.newpipe.extractor.ServiceList.YouTube.getStreamExtractor(url)
+        extractor.forceLocalization(YoutubeService.currentLocalization())
+        extractor.forceContentCountry(YoutubeService.currentContentCountry())
         val info = StreamInfo.getInfo(extractor)
-        val channelUrl = info.uploaderUrl
-        val channelId = extractChannelId(channelUrl)
-        // info.name — оригинальный title из videoDetails (не автоперевод YouTube)
-        val item = VideoItem(
+
+        val item = meta?.item?.copy(
+            uploader = meta.item.uploader.ifBlank { info.uploaderName.orEmpty() },
+            thumbnailUrl = meta.item.thumbnailUrl
+                ?: resolveThumbnailUrl(info.id, info.thumbnails.maxByOrNull { it.height }?.url),
+            durationSeconds = meta.item.durationSeconds
+                ?: info.duration.takeIf { it > 0 },
+            uploaderUrl = meta.channelUrl ?: info.uploaderUrl
+        ) ?: VideoItem(
             id = info.id,
             title = info.name.orEmpty(),
             uploader = info.uploaderName.orEmpty(),
             thumbnailUrl = resolveThumbnailUrl(info.id, info.thumbnails.maxByOrNull { it.height }?.url),
             durationSeconds = info.duration.takeIf { it > 0 },
             url = info.url ?: url,
-            uploaderUrl = channelUrl
+            uploaderUrl = info.uploaderUrl
         )
+
+        val channelUrl = meta?.channelUrl ?: info.uploaderUrl
+        val channelId = meta?.channelId ?: extractChannelId(channelUrl)
 
         val progressiveAudio = info.audioStreams
             .orEmpty()
@@ -208,7 +186,6 @@ class YoutubeRepository {
             )
         }
 
-        // Adaptive (видео+аудио синхрон) предпочтительнее muxed на той же высоте
         val videoPlayback = (adaptiveByHeight.keys + muxedByHeight.keys)
             .distinct()
             .sortedDescending()
@@ -231,34 +208,45 @@ class YoutubeRepository {
         val playbackOptions = (videoPlayback.ifEmpty { muxedByHeight.values.toList() } + audioOnlyPlayback)
             .sortedByDescending { it.height }
 
-        val related = info.relatedItems
-            .orEmpty()
-            .filterIsInstance<StreamInfoItem>()
-            .mapNotNull { it.toVideoItem() }
-            .distinctBy { it.id }
-            .take(20)
-
         VideoDetails(
             item = item,
-            description = info.description?.content.orEmpty(),
-            viewCount = info.viewCount.takeIf { it >= 0 },
+            description = meta?.description?.takeIf { it.isNotBlank() }
+                ?: info.description?.content.orEmpty(),
+            viewCount = meta?.viewCount ?: info.viewCount.takeIf { it >= 0 },
             channelId = channelId,
             channelUrl = channelUrl,
-            channelAvatarUrl = info.uploaderAvatars.maxByOrNull { it.height }?.url,
+            channelAvatarUrl = channelAvatar
+                ?: info.uploaderAvatars.maxByOrNull { it.height }?.url,
             playbackOptions = playbackOptions,
             streams = downloadStreams,
-            related = related,
+            related = related.ifEmpty {
+                info.relatedItems
+                    .orEmpty()
+                    .filterIsInstance<org.schabi.newpipe.extractor.stream.StreamInfoItem>()
+                    .mapNotNull { relatedItem ->
+                        val relatedUrl = relatedItem.url ?: return@mapNotNull null
+                        val relatedId = extractVideoId(relatedUrl) ?: return@mapNotNull null
+                        VideoItem(
+                            id = relatedId,
+                            title = relatedItem.name.orEmpty(),
+                            uploader = relatedItem.uploaderName.orEmpty(),
+                            thumbnailUrl = resolveThumbnailUrl(
+                                relatedId,
+                                relatedItem.thumbnails.maxByOrNull { it.height }?.url
+                            ),
+                            durationSeconds = relatedItem.duration.takeIf { it > 0 },
+                            url = relatedUrl,
+                            uploaderUrl = relatedItem.uploaderUrl
+                        )
+                    }
+                    .distinctBy { it.id }
+                    .take(20)
+            },
             audioLanguages = audioLanguages,
             selectedAudioLanguage = selectedLangCode
         )
     }
 
-    private fun applyLocalization(extractor: org.schabi.newpipe.extractor.Extractor) {
-        extractor.forceLocalization(YoutubeService.currentLocalization())
-        extractor.forceContentCountry(YoutubeService.currentContentCountry())
-    }
-
-    /** Пересобрать опции воспроизведения с другой аудиодорожкой. */
     fun withAudioLanguage(details: VideoDetails, languageCode: String): VideoDetails {
         val track = details.audioLanguages.firstOrNull {
             it.code.equals(languageCode, ignoreCase = true)
@@ -279,27 +267,6 @@ class YoutubeRepository {
         return details.copy(
             playbackOptions = playback,
             selectedAudioLanguage = track.code
-        )
-    }
-
-    private fun StreamInfoItem.isLikelyShort(): Boolean {
-        if (isShortFormContent) return true
-        if (url?.contains("/shorts/", ignoreCase = true) == true) return true
-        val seconds = duration
-        return seconds in 1..MAX_SHORT_DURATION_SEC
-    }
-
-    private fun StreamInfoItem.toVideoItem(): VideoItem? {
-        val url = url ?: return null
-        val id = extractVideoId(url) ?: return null
-        return VideoItem(
-            id = id,
-            title = name.orEmpty(),
-            uploader = uploaderName.orEmpty(),
-            thumbnailUrl = resolveThumbnailUrl(id, thumbnails.maxByOrNull { it.height }?.url),
-            durationSeconds = duration.takeIf { it > 0 },
-            url = url,
-            uploaderUrl = uploaderUrl
         )
     }
 
@@ -354,7 +321,6 @@ class YoutubeRepository {
     ): AudioLanguageOption? {
         if (options.isEmpty()) return null
         options.firstOrNull { it.code.equals(preferredLang, ignoreCase = true) }?.let { return it }
-        // Близкий код: pt-BR → pt
         options.firstOrNull {
             preferredLang.startsWith(it.code, ignoreCase = true) ||
                 it.code.startsWith(preferredLang, ignoreCase = true)
@@ -477,8 +443,6 @@ class YoutubeRepository {
     }
 
     companion object {
-        private const val MAX_SHORT_DURATION_SEC = 60L
-
         private val VIDEO_ID_PATTERN = Pattern.compile(
             "(?:youtu\\.be/|youtube\\.com/(?:watch\\?v=|embed/|shorts/|live/|v/))([\\w-]{11})"
         )

@@ -11,5 +11,7 @@ data class SubscriptionEntity(
     val avatarUrl: String?,
     val subscribedAt: Long = System.currentTimeMillis(),
     val notifyEnabled: Boolean = true,
-    val lastSeenVideoId: String? = null
+    val lastSeenVideoId: String? = null,
+    /** ID ресурса subscriptions.insert (только для аккаунта YouTube). */
+    val apiSubscriptionId: String? = null
 )

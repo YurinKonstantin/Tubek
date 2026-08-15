@@ -11,7 +11,7 @@ import androidx.room.RoomDatabase
         SubscriptionEntity::class,
         WatchHistoryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class TubekDatabase : RoomDatabase() {

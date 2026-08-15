@@ -1,21 +1,45 @@
 # Tubek
 
-Android-приложение для поиска и скачивания видео с YouTube (без YouTube Data API).
+Android-приложение для поиска, просмотра и скачивания видео с YouTube.
+Метаданные идут через **YouTube Data API v3**; потоки плеера/скачивания — через NewPipe Extractor.
 Интерфейс только на русском. Планируется публикация в RuStore.
 
-## Возможности v1
+## Возможности
 
 - Экран согласия: политика конфиденциальности + отказ от ответственности
-- Поиск видео по запросу
-- Открытие по ссылке (вставка / Share / Deep link)
-- Выбор качества (muxed-потоки, video-only + авто-аудио с объединением, отдельно аудио)
-- Фоновая загрузка в `Download/Tubek` с уведомлением о прогрессе
+- Главная лента, Shorts, поиск, подписки
+- Вход через Google: подписки и «Понравившиеся» с аккаунта YouTube
+- Гостевой режим: локальные подписки и история просмотров
+- Выбор качества, фоновая загрузка в `Download/Tubek`
+
+## Google Cloud (обязательно для сборки)
+
+1. Включите **YouTube Data API v3** в [Google Cloud Console](https://console.cloud.google.com/).
+2. Создайте **API key** и положите в `local.properties`:
+   ```properties
+   youtube.api.key=YOUR_API_KEY
+   ```
+3. Настройте OAuth consent screen (scopes `youtube` и `youtube.readonly`).
+4. Создайте OAuth clients:
+   - **Android** — package `ru.tubek.app` / `ru.tubek.app.debug` + SHA-1
+   - **Web application** — Client ID для AuthorizationClient
+5. Web Client ID в `local.properties`:
+   ```properties
+   youtube.oauth.web.client.id=XXXX.apps.googleusercontent.com
+   ```
+
+SHA-1 debug:
+```bash
+keytool -list -v -keystore %USERPROFILE%\.android\debug.keystore -alias androiddebugkey -storepass android -keypass android
+```
+
+Release keystore (если создан): `keystore/tubek-release.keystore` (папка в `.gitignore`).
 
 ## Важно
 
 Приложение **не является** официальным клиентом YouTube. Скачивание может нарушать условия YouTube и авторские права. Ответственность за использование несёт пользователь.
 
-Технически используется библиотека [NewPipe Extractor](https://github.com/TeamNewPipe/NewPipeExtractor) (без ключа Google API).
+История просмотров через Data API недоступна: у авторизованного пользователя экран «История» показывает **Понравившиеся**.
 
 ## Как открыть в Android Studio
 
@@ -23,16 +47,14 @@ Android-приложение для поиска и скачивания вид�
 2. **File → Open** → папка `C:\Users\yurin\Projects\Tubek`
 3. Важно: Gradle должен использовать **JDK 17**, не JBR 25.
    - **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK**
-   - Выберите `Tubek/.jdk/jdk-17.0.20+8`  
-     (или **Add JDK…** и укажите эту папку)
-4. **File → Sync Project with Gradle Files**
-5. Подключите устройство/эмулятор и нажмите Run.
-
-Ошибка `IllegalArgumentException: 25.0.2` значит Studio взяла Java 25. В проекте уже прописан JDK 17 в `gradle.properties` (`org.gradle.java.home`).
+   - Выберите `Tubek/.jdk/jdk-17.0.20+8`
+4. Заполните `local.properties` (sdk.dir + youtube.*).
+5. **File → Sync Project with Gradle Files**
+6. Подключите устройство/эмулятор и нажмите Run.
 
 ## Сборка релиза для RuStore
 
-1. Создайте keystore (Build → Generate Signed Bundle / APK).
+1. Используйте `keystore/tubek-release.keystore` (или свой).
 2. Соберите **Android App Bundle (AAB)** или APK.
 3. Загрузите в консоль RuStore вместе с политикой конфиденциальности.
 
@@ -41,12 +63,6 @@ Android-приложение для поиска и скачивания вид�
 
 ## Структура
 
-- `app/src/main/java/ru/tubek/app/youtube` — поиск и разбор потоков
-- `app/src/main/java/ru/tubek/app/download` — WorkManager-загрузки
-- `app/src/main/java/ru/tubek/app/ui` — Compose UI
-
-## Ограничения v1
-
-- Нет полноценного встроенного плеера (фокус на скачивании)
-- Слияние video-only + audio через MediaMuxer; при несовместимых кодеках объединение может не удаться
-- Некоторые потоки (live/DASH-сегменты) недоступны как progressive HTTP
+- `app/.../youtube` — Data API, OAuth, NewPipe-потоки
+- `app/.../download` — WorkManager-загрузки
+- `app/.../ui` — Compose UI

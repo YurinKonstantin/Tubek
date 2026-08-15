@@ -21,6 +21,9 @@ import ru.tubek.app.R
 import ru.tubek.app.data.PreferencesRepository
 import ru.tubek.app.data.SubscriptionRepository
 import ru.tubek.app.proxy.withProxyFallback
+import ru.tubek.app.network.OkHttpClients
+import ru.tubek.app.youtube.YoutubeAuthManager
+import ru.tubek.app.youtube.YoutubeDataApi
 import ru.tubek.app.youtube.YoutubeRepository
 import java.util.concurrent.TimeUnit
 
@@ -33,12 +36,33 @@ class NewVideoCheckWorker(
         val prefs = PreferencesRepository(applicationContext)
         if (!prefs.notifyNewVideos.first()) return Result.success()
 
-        val subscriptions = SubscriptionRepository(applicationContext).getAll()
-            .filter { it.notifyEnabled }
+        val subRepo = SubscriptionRepository(applicationContext)
+        val auth = YoutubeAuthManager(applicationContext)
+        val subscriptions = if (auth.isSignedIn()) {
+            runCatching {
+                val api = YoutubeDataApi(
+                    context = applicationContext,
+                    clientProvider = { OkHttpClients.metadata(applicationContext) },
+                    accessTokenProvider = { auth.accessToken() }
+                )
+                val notifyMap = subRepo.getAll().associate { it.channelId to it.notifyEnabled }
+                YoutubeRepository(api).listRemoteSubscriptions().map { remote ->
+                    remote.toEntity(notifyEnabled = notifyMap[remote.channelId] ?: true)
+                }
+            }.getOrElse { subRepo.getAll() }
+        } else {
+            subRepo.getAll()
+        }.filter { it.notifyEnabled }
+
         if (subscriptions.isEmpty()) return Result.success()
 
-        val repo = YoutubeRepository()
-        val subRepo = SubscriptionRepository(applicationContext)
+        val repo = YoutubeRepository(
+            YoutubeDataApi(
+                context = applicationContext,
+                clientProvider = { OkHttpClients.metadata(applicationContext) },
+                accessTokenProvider = { auth.accessToken() }
+            )
+        )
         ensureChannel(applicationContext)
 
         subscriptions.forEach { sub ->
@@ -50,6 +74,9 @@ class NewVideoCheckWorker(
                 if (sub.lastSeenVideoId != null) {
                     showNotification(applicationContext, sub.name, latest.title, latest.url)
                 }
+                // Кэш lastSeen для remote-подписок (сами подписки живут на YouTube)
+                subRepo.subscribe(sub.channelId, sub.name, sub.channelUrl, sub.avatarUrl)
+                subRepo.setNotifyEnabled(sub.channelId, sub.notifyEnabled)
                 subRepo.setLastSeenVideoId(sub.channelId, latest.id)
             }
         }
