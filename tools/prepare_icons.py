@@ -1,7 +1,7 @@
 from PIL import Image
 from pathlib import Path
 
-src = Path(r"C:\Users\yurin\.cursor\projects\c-Users-yurin-Projects-Tubek\assets\tubek_icon.png")
+src = Path(r"C:\Users\yurin\Projects\Tubek\assets\tubek_icon.png")
 res = Path(r"C:\Users\yurin\Projects\Tubek\app\src\main\res")
 assets = Path(r"C:\Users\yurin\Projects\Tubek\assets")
 assets.mkdir(parents=True, exist_ok=True)

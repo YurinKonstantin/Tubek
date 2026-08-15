@@ -15,10 +15,14 @@ enum class CustomProxyMode(val id: String, val labelRu: String) {
 }
 
 /**
- * Разбор адреса: `host:port`, `http://host:port`, `socks5://host:port`.
+ * Разбор адреса: `host:port`, `user:pass@host:port`, `http://host:port`, `socks5://user:pass@host:port`.
  */
 object CustomProxyParser {
-    fun parse(raw: String): ProxyEndpoint? {
+    fun parse(
+        raw: String,
+        usernameOverride: String? = null,
+        passwordOverride: String? = null
+    ): ProxyEndpoint? {
         val trimmed = raw.trim()
         if (trimmed.isBlank()) return null
 
@@ -46,23 +50,49 @@ object CustomProxyParser {
         }
 
         rest = rest.substringBefore('/').substringBefore('?').trim()
-        if (rest.startsWith("[")) {
-            // [IPv6]:port
-            val close = rest.indexOf(']')
-            if (close <= 1) return null
-            val host = rest.substring(1, close)
-            val portPart = rest.substring(close + 1).removePrefix(":").trim()
-            val port = portPart.toIntOrNull() ?: return null
-            if (port !in 1..65535 || host.isBlank()) return null
-            return ProxyEndpoint(host, port, type, "custom")
+
+        var userFromUrl: String? = null
+        var passFromUrl: String? = null
+        val at = rest.lastIndexOf('@')
+        if (at > 0) {
+            val creds = rest.substring(0, at)
+            rest = rest.substring(at + 1)
+            val colon = creds.indexOf(':')
+            if (colon >= 0) {
+                userFromUrl = creds.substring(0, colon).ifBlank { null }
+                passFromUrl = creds.substring(colon + 1)
+            } else {
+                userFromUrl = creds.ifBlank { null }
+            }
         }
 
-        val colon = rest.lastIndexOf(':')
-        if (colon <= 0 || colon >= rest.length - 1) return null
-        val host = rest.substring(0, colon).trim()
-        val port = rest.substring(colon + 1).trim().toIntOrNull() ?: return null
+        val host: String
+        val port: Int
+        if (rest.startsWith("[")) {
+            val close = rest.indexOf(']')
+            if (close <= 1) return null
+            host = rest.substring(1, close)
+            val portPart = rest.substring(close + 1).removePrefix(":").trim()
+            port = portPart.toIntOrNull() ?: return null
+        } else {
+            val colon = rest.lastIndexOf(':')
+            if (colon <= 0 || colon >= rest.length - 1) return null
+            host = rest.substring(0, colon).trim()
+            port = rest.substring(colon + 1).trim().toIntOrNull() ?: return null
+        }
         if (port !in 1..65535 || host.isBlank()) return null
-        return ProxyEndpoint(host, port, type, "custom")
+
+        val username = usernameOverride?.trim()?.takeIf { it.isNotEmpty() } ?: userFromUrl
+        val password = passwordOverride?.takeIf { !username.isNullOrBlank() } ?: passFromUrl
+
+        return ProxyEndpoint(
+            host = host,
+            port = port,
+            type = type,
+            source = "custom",
+            username = username,
+            password = password
+        )
     }
 
     fun format(endpoint: ProxyEndpoint): String {

@@ -7,7 +7,8 @@ data class VideoItem(
     val thumbnailUrl: String?,
     val durationSeconds: Long?,
     val url: String,
-    val uploaderUrl: String? = null
+    val uploaderUrl: String? = null,
+    val channelAvatarUrl: String? = null
 )
 
 /** Поток для онлайн-просмотра (adaptive: video + audio или muxed). */

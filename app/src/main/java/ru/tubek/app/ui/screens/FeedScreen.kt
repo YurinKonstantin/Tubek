@@ -25,7 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ru.tubek.app.data.Countries
+import ru.tubek.app.ui.components.AppBarTitleWithStatus
 import ru.tubek.app.ui.components.FeedVideoCard
+import ru.tubek.app.ui.components.ForceSwitchProxyButton
 import ru.tubek.app.ui.components.ShortsShelfRow
 import ru.tubek.app.ui.viewmodel.FeedUiState
 import ru.tubek.app.youtube.VideoItem
@@ -34,7 +36,6 @@ private sealed interface FeedListItem {
     data class Header(val title: String) : FeedListItem
     data class Video(val item: VideoItem, val key: String) : FeedListItem
     data class ShortsShelf(val items: List<VideoItem>, val key: String) : FeedListItem
-    data class Status(val text: String) : FeedListItem
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,15 +44,28 @@ fun FeedScreen(
     state: FeedUiState,
     onRefresh: () -> Unit,
     onOpenVideo: (VideoItem) -> Unit,
-    onOpenSearch: () -> Unit
+    onOpenSearch: () -> Unit,
+    proxyEnabled: Boolean = false,
+    isSwitchingProxy: Boolean = false,
+    onForceSwitchProxy: () -> Unit = {},
+    headerStatus: String? = null
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("Tubik", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    AppBarTitleWithStatus(
+                        title = "Tubik",
+                        status = headerStatus ?: state.connectionStatus,
+                        emphasizeTitle = true
+                    )
                 },
                 actions = {
+                    ForceSwitchProxyButton(
+                        enabled = proxyEnabled,
+                        switching = isSwitchingProxy,
+                        onClick = onForceSwitchProxy
+                    )
                     IconButton(onClick = onOpenSearch) {
                         Icon(Icons.Default.Search, contentDescription = "Поиск")
                     }
@@ -72,19 +86,7 @@ fun FeedScreen(
             when {
                 state.isLoading && !state.hasContent -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(24.dp)
-                        ) {
-                            CircularProgressIndicator()
-                            Text(
-                                text = state.connectionStatus
-                                    ?: "Ищем рабочее подключение. Это может занять некоторое время…",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
-                                modifier = Modifier.padding(top = 16.dp)
-                            )
-                        }
+                        CircularProgressIndicator()
                     }
                 }
 
@@ -113,8 +115,7 @@ fun FeedScreen(
                         state.recommended,
                         state.trending,
                         state.shorts,
-                        state.contentCountryCode,
-                        state.connectionStatus
+                        state.contentCountryCode
                     ) {
                         buildFeedRows(state)
                     }
@@ -124,18 +125,9 @@ fun FeedScreen(
                                 is FeedListItem.Header -> "h-${row.title}"
                                 is FeedListItem.Video -> row.key
                                 is FeedListItem.ShortsShelf -> row.key
-                                is FeedListItem.Status -> "status"
                             }
                         }) { row ->
                             when (row) {
-                                is FeedListItem.Status -> {
-                                    Text(
-                                        text = row.text,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                                    )
-                                }
                                 is FeedListItem.Header -> SectionTitle(row.title)
                                 is FeedListItem.Video -> {
                                     FeedVideoCard(
@@ -160,7 +152,6 @@ fun FeedScreen(
 
 private fun buildFeedRows(state: FeedUiState): List<FeedListItem> {
     val rows = mutableListOf<FeedListItem>()
-    state.connectionStatus?.let { rows += FeedListItem.Status(it) }
 
     var videoCount = 0
     var shelfIndex = 0

@@ -2,8 +2,12 @@ package ru.tubek.app.network
 
 import android.content.Context
 import okhttp3.Cache
+import okhttp3.Credentials
 import okhttp3.OkHttpClient
+import ru.tubek.app.proxy.ProxyEndpoint
 import ru.tubek.app.proxy.ProxyPool
+import java.net.Authenticator
+import java.net.PasswordAuthentication
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -24,8 +28,6 @@ object OkHttpClients {
     fun rebuildMetadata(context: Context): OkHttpClient {
         val pool = ProxyPool.get()
         val viaProxy = pool.currentJavaProxy() != null
-        // При включённом прокси не ждём 30 с на «прямой»/зависший запрос —
-        // иначе смена прокси почти не срабатывает.
         val timeout = if (pool.isEnabled()) pool.responseTimeoutSec() else 30L
         val client = baseBuilder(
             connectSec = timeout,
@@ -86,8 +88,44 @@ object OkHttpClients {
     }
 
     private fun OkHttpClient.Builder.applyProxy(viaProxy: Boolean): OkHttpClient.Builder {
-        if (viaProxy) {
-            ProxyPool.get().currentJavaProxy()?.let { proxy(it) }
+        if (!viaProxy) return this
+        val endpoint = ProxyPool.get().current() ?: return this
+        proxy(endpoint.toJavaProxy())
+        installProxyAuth(endpoint)
+        return this
+    }
+
+    private fun OkHttpClient.Builder.installProxyAuth(endpoint: ProxyEndpoint): OkHttpClient.Builder {
+        val user = endpoint.username?.takeIf { it.isNotBlank() } ?: return this
+        val pass = endpoint.password.orEmpty()
+        if (endpoint.type == ProxyEndpoint.Type.HTTP) {
+            val credential = Credentials.basic(user, pass)
+            proxyAuthenticator { _, response ->
+                if (response.request.header("Proxy-Authorization") != null) {
+                    null
+                } else {
+                    response.request.newBuilder()
+                        .header("Proxy-Authorization", credential)
+                        .build()
+                }
+            }
+        } else {
+            // SOCKS5: JVM Authenticator for PasswordAuthentication
+            Authenticator.setDefault(object : Authenticator() {
+                override fun getPasswordAuthentication(): PasswordAuthentication? {
+                    val requesting = requestingSite
+                    val host = endpoint.host
+                    val matchesHost = requesting == null ||
+                        requesting.hostAddress == host ||
+                        requesting.hostName.equals(host, ignoreCase = true)
+                    val matchesPort = requestingPort == -1 || requestingPort == endpoint.port
+                    return if (matchesHost && matchesPort) {
+                        PasswordAuthentication(user, pass.toCharArray())
+                    } else {
+                        null
+                    }
+                }
+            })
         }
         return this
     }

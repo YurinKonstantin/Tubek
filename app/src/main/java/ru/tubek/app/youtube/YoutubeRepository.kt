@@ -67,7 +67,10 @@ class YoutubeRepository(
         dataApi.likedVideos(maxResults)
     }
 
-    suspend fun resolve(
+    /**
+     * Критический путь: только NewPipe-потоки, чтобы сразу запустить плеер.
+     */
+    suspend fun resolvePlayback(
         urlOrId: String,
         preferredAudioLanguage: String = Locale.getDefault().language
     ): VideoDetails = withContext(Dispatchers.IO) {
@@ -75,31 +78,98 @@ class YoutubeRepository(
         val videoId = extractVideoId(urlOrId) ?: extractVideoId(url)
             ?: error("Не удалось определить ID видео")
 
-        val meta = runCatching { dataApi.videoResource(videoId) }.getOrNull()
-        val related = runCatching {
-            dataApi.relatedVideos(
-                seedTitle = meta?.item?.title.orEmpty().ifBlank { videoId },
-                excludeId = videoId
-            )
-        }.getOrDefault(emptyList())
-
-        val channelAvatar = meta?.channelId?.let { id ->
-            runCatching { dataApi.channelInfo(id)?.avatarUrl }.getOrNull()
-        }
-
-        // Потоки — только NewPipe
         val extractor = org.schabi.newpipe.extractor.ServiceList.YouTube.getStreamExtractor(url)
         extractor.forceLocalization(YoutubeService.currentLocalization())
         extractor.forceContentCountry(YoutubeService.currentContentCountry())
         val info = StreamInfo.getInfo(extractor)
+        buildDetailsFromStreamInfo(
+            info = info,
+            url = url,
+            videoId = videoId,
+            preferredAudioLanguage = preferredAudioLanguage,
+            meta = null,
+            related = emptyList(),
+            channelAvatar = info.uploaderAvatars.maxByOrNull { it.height }?.url
+        )
+    }
 
+    /**
+     * Фон: метаданные API, аватар канала, похожие — без блокировки старта плеера.
+     */
+    suspend fun enrichDetails(
+        base: VideoDetails,
+        cachedChannelAvatarUrl: String? = null
+    ): VideoDetails = withContext(Dispatchers.IO) {
+        val videoId = base.item.id
+        val meta = runCatching { dataApi.videoResource(videoId) }.getOrNull()
+        val related = runCatching {
+            dataApi.relatedVideos(
+                seedTitle = meta?.item?.title.orEmpty()
+                    .ifBlank { base.item.title }
+                    .ifBlank { videoId },
+                excludeId = videoId
+            )
+        }.getOrDefault(emptyList())
+
+        val channelId = meta?.channelId ?: base.channelId
+        val channelAvatar = cachedChannelAvatarUrl
+            ?: channelId?.let { id ->
+                runCatching { dataApi.channelInfo(id)?.avatarUrl }.getOrNull()
+            }
+            ?: base.channelAvatarUrl
+
+        val item = meta?.item?.copy(
+            uploader = meta.item.uploader.ifBlank { base.item.uploader },
+            thumbnailUrl = meta.item.thumbnailUrl ?: base.item.thumbnailUrl,
+            durationSeconds = meta.item.durationSeconds ?: base.item.durationSeconds,
+            uploaderUrl = meta.channelUrl ?: base.item.uploaderUrl,
+            channelAvatarUrl = channelAvatar ?: base.item.channelAvatarUrl
+        ) ?: base.item.copy(
+            channelAvatarUrl = channelAvatar ?: base.item.channelAvatarUrl
+        )
+
+        base.copy(
+            item = item,
+            description = meta?.description?.takeIf { it.isNotBlank() }
+                ?: base.description,
+            viewCount = meta?.viewCount ?: base.viewCount,
+            channelId = channelId,
+            channelUrl = meta?.channelUrl ?: base.channelUrl,
+            channelAvatarUrl = channelAvatar,
+            related = related.ifEmpty { base.related }
+        )
+    }
+
+    suspend fun resolve(
+        urlOrId: String,
+        preferredAudioLanguage: String = Locale.getDefault().language
+    ): VideoDetails {
+        val playback = resolvePlayback(urlOrId, preferredAudioLanguage)
+        return enrichDetails(playback)
+    }
+
+    suspend fun channelInfo(channelUrlOrId: String) = withContext(Dispatchers.IO) {
+        val id = dataApi.resolveChannelId(channelUrlOrId) ?: return@withContext null
+        dataApi.channelInfo(id)
+    }
+
+    private fun buildDetailsFromStreamInfo(
+        info: StreamInfo,
+        url: String,
+        videoId: String,
+        preferredAudioLanguage: String,
+        meta: VideoResource?,
+        related: List<VideoItem>,
+        channelAvatar: String?
+    ): VideoDetails {
         val item = meta?.item?.copy(
             uploader = meta.item.uploader.ifBlank { info.uploaderName.orEmpty() },
             thumbnailUrl = meta.item.thumbnailUrl
                 ?: resolveThumbnailUrl(info.id, info.thumbnails.maxByOrNull { it.height }?.url),
             durationSeconds = meta.item.durationSeconds
                 ?: info.duration.takeIf { it > 0 },
-            uploaderUrl = meta.channelUrl ?: info.uploaderUrl
+            uploaderUrl = meta.channelUrl ?: info.uploaderUrl,
+            channelAvatarUrl = channelAvatar
         ) ?: VideoItem(
             id = info.id,
             title = info.name.orEmpty(),
@@ -107,7 +177,8 @@ class YoutubeRepository(
             thumbnailUrl = resolveThumbnailUrl(info.id, info.thumbnails.maxByOrNull { it.height }?.url),
             durationSeconds = info.duration.takeIf { it > 0 },
             url = info.url ?: url,
-            uploaderUrl = info.uploaderUrl
+            uploaderUrl = info.uploaderUrl,
+            channelAvatarUrl = channelAvatar
         )
 
         val channelUrl = meta?.channelUrl ?: info.uploaderUrl
@@ -208,40 +279,39 @@ class YoutubeRepository(
         val playbackOptions = (videoPlayback.ifEmpty { muxedByHeight.values.toList() } + audioOnlyPlayback)
             .sortedByDescending { it.height }
 
-        VideoDetails(
+        val extractorRelated = info.relatedItems
+            .orEmpty()
+            .filterIsInstance<org.schabi.newpipe.extractor.stream.StreamInfoItem>()
+            .mapNotNull { relatedItem ->
+                val relatedUrl = relatedItem.url ?: return@mapNotNull null
+                val relatedId = extractVideoId(relatedUrl) ?: return@mapNotNull null
+                VideoItem(
+                    id = relatedId,
+                    title = relatedItem.name.orEmpty(),
+                    uploader = relatedItem.uploaderName.orEmpty(),
+                    thumbnailUrl = resolveThumbnailUrl(
+                        relatedId,
+                        relatedItem.thumbnails.maxByOrNull { it.height }?.url
+                    ),
+                    durationSeconds = relatedItem.duration.takeIf { it > 0 },
+                    url = relatedUrl,
+                    uploaderUrl = relatedItem.uploaderUrl
+                )
+            }
+            .distinctBy { it.id }
+            .take(20)
+
+        return VideoDetails(
             item = item,
             description = meta?.description?.takeIf { it.isNotBlank() }
                 ?: info.description?.content.orEmpty(),
             viewCount = meta?.viewCount ?: info.viewCount.takeIf { it >= 0 },
             channelId = channelId,
             channelUrl = channelUrl,
-            channelAvatarUrl = channelAvatar
-                ?: info.uploaderAvatars.maxByOrNull { it.height }?.url,
+            channelAvatarUrl = channelAvatar,
             playbackOptions = playbackOptions,
             streams = downloadStreams,
-            related = related.ifEmpty {
-                info.relatedItems
-                    .orEmpty()
-                    .filterIsInstance<org.schabi.newpipe.extractor.stream.StreamInfoItem>()
-                    .mapNotNull { relatedItem ->
-                        val relatedUrl = relatedItem.url ?: return@mapNotNull null
-                        val relatedId = extractVideoId(relatedUrl) ?: return@mapNotNull null
-                        VideoItem(
-                            id = relatedId,
-                            title = relatedItem.name.orEmpty(),
-                            uploader = relatedItem.uploaderName.orEmpty(),
-                            thumbnailUrl = resolveThumbnailUrl(
-                                relatedId,
-                                relatedItem.thumbnails.maxByOrNull { it.height }?.url
-                            ),
-                            durationSeconds = relatedItem.duration.takeIf { it > 0 },
-                            url = relatedUrl,
-                            uploaderUrl = relatedItem.uploaderUrl
-                        )
-                    }
-                    .distinctBy { it.id }
-                    .take(20)
-            },
+            related = related.ifEmpty { extractorRelated },
             audioLanguages = audioLanguages,
             selectedAudioLanguage = selectedLangCode
         )

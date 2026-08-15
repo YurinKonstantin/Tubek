@@ -28,6 +28,8 @@ class PreferencesRepository(private val context: Context) {
     private val preferredPlaybackHeightKey = intPreferencesKey("preferred_playback_height_v1")
     private val customProxyAddressKey = stringPreferencesKey("custom_proxy_address_v1")
     private val customProxyModeKey = stringPreferencesKey("custom_proxy_mode_v1")
+    private val customProxyUsernameKey = stringPreferencesKey("custom_proxy_username_v1")
+    private val customProxyPasswordKey = stringPreferencesKey("custom_proxy_password_v1")
     private val preferredAudioLanguageKey = stringPreferencesKey("preferred_audio_language_v1")
 
     val consentAccepted: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -52,6 +54,14 @@ class PreferencesRepository(private val context: Context) {
 
     val customProxyMode: Flow<CustomProxyMode> = context.dataStore.data.map { prefs ->
         CustomProxyMode.fromId(prefs[customProxyModeKey])
+    }
+
+    val customProxyUsername: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[customProxyUsernameKey].orEmpty()
+    }
+
+    val customProxyPassword: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[customProxyPasswordKey].orEmpty()
     }
 
     val notifyNewVideos: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -113,6 +123,18 @@ class PreferencesRepository(private val context: Context) {
     suspend fun setCustomProxyMode(mode: CustomProxyMode) {
         context.dataStore.edit { prefs ->
             prefs[customProxyModeKey] = mode.id
+        }
+    }
+
+    suspend fun setCustomProxyUsername(username: String) {
+        context.dataStore.edit { prefs ->
+            prefs[customProxyUsernameKey] = username.trim()
+        }
+    }
+
+    suspend fun setCustomProxyPassword(password: String) {
+        context.dataStore.edit { prefs ->
+            prefs[customProxyPasswordKey] = password
         }
     }
 

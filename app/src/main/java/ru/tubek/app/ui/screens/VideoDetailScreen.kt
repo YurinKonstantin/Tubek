@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -33,18 +35,18 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -76,9 +79,11 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import ru.tubek.app.player.PlayerController
 import ru.tubek.app.ui.components.CompactVideoRow
+import ru.tubek.app.ui.components.ProxiedAsyncImage
 import ru.tubek.app.ui.viewmodel.DetailUiState
 import ru.tubek.app.youtube.PlaybackOption
 import ru.tubek.app.youtube.StreamOption
+import ru.tubek.app.youtube.VideoDetails
 import ru.tubek.app.youtube.VideoItem
 import ru.tubek.app.youtube.formatDuration
 
@@ -97,7 +102,8 @@ fun VideoDetailScreen(
     onOpenRelated: (VideoItem) -> Unit = {},
     onContinueWatching: () -> Unit = {},
     onStartFromBeginning: () -> Unit = {},
-    onApplyBetterConnection: () -> Unit = {}
+    onApplyBetterConnection: () -> Unit = {},
+    onOpenChannel: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -146,11 +152,6 @@ fun VideoDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { onShowDownloadSheet(true) }) {
-                        Icon(Icons.Default.Download, contentDescription = "Скачать")
                     }
                 }
             )
@@ -257,147 +258,97 @@ fun VideoDetailScreen(
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = buildString {
-                                    append(details.item.uploader)
-                                    details.viewCount?.let { append(" · ${formatViews(it)}") }
-                                    details.item.durationSeconds.formatDuration()
-                                        .takeIf { it.isNotEmpty() }
-                                        ?.let { append(" · $it") }
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                            )
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(8.dp))
                             Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (!details.channelUrl.isNullOrBlank() ||
+                                            !details.channelId.isNullOrBlank()
+                                        ) {
+                                            Modifier.clickable {
+                                                onOpenChannel(
+                                                    details.channelUrl
+                                                        ?: details.channelId.orEmpty()
+                                                )
+                                            }
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             ) {
+                                val avatar = details.channelAvatarUrl
+                                    ?: details.item.channelAvatarUrl
+                                if (!avatar.isNullOrBlank()) {
+                                    ProxiedAsyncImage(
+                                        url = avatar,
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = details.item.uploader.take(1).uppercase()
+                                                .ifBlank { "T" },
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = details.item.uploader,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = buildString {
+                                            details.viewCount?.let { append(formatViews(it)) }
+                                            details.item.durationSeconds.formatDuration()
+                                                .takeIf { it.isNotEmpty() }
+                                                ?.let {
+                                                    if (isNotEmpty()) append(" · ")
+                                                    append(it)
+                                                }
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                    )
+                                }
                                 if (details.channelId != null) {
                                     if (state.isSubscribed) {
                                         OutlinedButton(onClick = onToggleSubscribe) {
-                                            Text("Отписаться")
+                                            Text("Отписка")
                                         }
                                     } else {
                                         Button(onClick = onToggleSubscribe) {
-                                            Text("Подписаться")
-                                        }
-                                    }
-                                }
-                                OutlinedButton(onClick = { onShowDownloadSheet(true) }) {
-                                    Icon(Icons.Default.Download, contentDescription = null)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Скачать")
-                                }
-                            }
-
-                            val audioLanguages = details.audioLanguages
-                            if (audioLanguages.size > 1) {
-                                Spacer(Modifier.height(12.dp))
-                                Text("Язык звука", fontWeight = FontWeight.SemiBold)
-                                Spacer(Modifier.height(6.dp))
-                                var langExpanded by remember(details.item.id) { mutableStateOf(false) }
-                                val selectedLang = audioLanguages.firstOrNull {
-                                    it.code.equals(details.selectedAudioLanguage, ignoreCase = true)
-                                } ?: audioLanguages.first()
-                                ExposedDropdownMenuBox(
-                                    expanded = langExpanded,
-                                    onExpandedChange = { langExpanded = it }
-                                ) {
-                                    OutlinedTextField(
-                                        value = selectedLang.label,
-                                        onValueChange = {},
-                                        readOnly = true,
-                                        trailingIcon = {
-                                            ExposedDropdownMenuDefaults.TrailingIcon(
-                                                expanded = langExpanded
-                                            )
-                                        },
-                                        modifier = Modifier
-                                            .menuAnchor()
-                                            .fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    ExposedDropdownMenu(
-                                        expanded = langExpanded,
-                                        onDismissRequest = { langExpanded = false }
-                                    ) {
-                                        audioLanguages.forEach { lang ->
-                                            DropdownMenuItem(
-                                                text = { Text(lang.label) },
-                                                onClick = {
-                                                    langExpanded = false
-                                                    onSelectAudioLanguage(lang.code)
-                                                }
-                                            )
+                                            Text("Подписка")
                                         }
                                     }
                                 }
                             }
 
-                            val videoOptions = details.playbackOptions.filter { !it.isAudioOnly }
-                            val audioOption = details.playbackOptions.firstOrNull { it.isAudioOnly }
-                            if (videoOptions.isNotEmpty()) {
-                                Spacer(Modifier.height(12.dp))
-                                Text("Качество", fontWeight = FontWeight.SemiBold)
-                                Spacer(Modifier.height(6.dp))
-                                var qualityExpanded by remember { mutableStateOf(false) }
-                                val selected = state.selectedPlayback
-                                    ?.takeUnless { it.isAudioOnly }
-                                    ?: videoOptions.first()
-                                ExposedDropdownMenuBox(
-                                    expanded = qualityExpanded,
-                                    onExpandedChange = { qualityExpanded = it }
-                                ) {
-                                    OutlinedTextField(
-                                        value = selected.label,
-                                        onValueChange = {},
-                                        readOnly = true,
-                                        trailingIcon = {
-                                            ExposedDropdownMenuDefaults.TrailingIcon(
-                                                expanded = qualityExpanded
-                                            )
-                                        },
-                                        modifier = Modifier
-                                            .menuAnchor()
-                                            .fillMaxWidth(),
-                                        shape = RoundedCornerShape(12.dp)
-                                    )
-                                    ExposedDropdownMenu(
-                                        expanded = qualityExpanded,
-                                        onDismissRequest = { qualityExpanded = false }
-                                    ) {
-                                        videoOptions.forEach { opt ->
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        buildString {
-                                                            append(opt.label)
-                                                            if (!opt.audioUrl.isNullOrBlank()) {
-                                                                append(" · видео+звук")
-                                                            }
-                                                        }
-                                                    )
-                                                },
-                                                onClick = {
-                                                    qualityExpanded = false
-                                                    onSelectPlayback(opt)
-                                                }
-                                            )
-                                        }
-                                        if (audioOption != null) {
-                                            DropdownMenuItem(
-                                                text = { Text(audioOption.label) },
-                                                onClick = {
-                                                    qualityExpanded = false
-                                                    onSelectPlayback(audioOption)
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                            Spacer(Modifier.height(12.dp))
+                            DetailActionIconRow(
+                                details = details,
+                                selectedPlayback = state.selectedPlayback,
+                                onSelectPlayback = onSelectPlayback,
+                                onSelectAudioLanguage = onSelectAudioLanguage,
+                                onShowDownloadSheet = { onShowDownloadSheet(true) }
+                            )
 
                             if (details.description.isNotBlank()) {
                                 Spacer(Modifier.height(12.dp))
@@ -520,6 +471,127 @@ fun VideoDetailScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun DetailActionIconRow(
+    details: VideoDetails,
+    selectedPlayback: PlaybackOption?,
+    onSelectPlayback: (PlaybackOption) -> Unit,
+    onSelectAudioLanguage: (String) -> Unit,
+    onShowDownloadSheet: () -> Unit
+) {
+    val audioLanguages = details.audioLanguages
+    val videoOptions = details.playbackOptions.filter { !it.isAudioOnly }
+    val audioOption = details.playbackOptions.firstOrNull { it.isAudioOnly }
+    var langExpanded by remember(details.item.id) { mutableStateOf(false) }
+    var qualityExpanded by remember(details.item.id) { mutableStateOf(false) }
+    val selectedLang = audioLanguages.firstOrNull {
+        it.code.equals(details.selectedAudioLanguage, ignoreCase = true)
+    } ?: audioLanguages.firstOrNull()
+    val selectedQuality = selectedPlayback
+        ?: videoOptions.firstOrNull()
+        ?: audioOption
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.Top
+    ) {
+        if (audioLanguages.size > 1) {
+            Box {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(onClick = { langExpanded = true }) {
+                        Icon(Icons.Default.Translate, contentDescription = "Язык звука")
+                    }
+                    Text(
+                        text = selectedLang?.label ?: "Язык",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(72.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = langExpanded,
+                    onDismissRequest = { langExpanded = false }
+                ) {
+                    audioLanguages.forEach { lang ->
+                        DropdownMenuItem(
+                            text = { Text(lang.label) },
+                            onClick = {
+                                langExpanded = false
+                                onSelectAudioLanguage(lang.code)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        if (videoOptions.isNotEmpty() || audioOption != null) {
+            Box {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(onClick = { qualityExpanded = true }) {
+                        Icon(Icons.Default.HighQuality, contentDescription = "Качество")
+                    }
+                    Text(
+                        text = selectedQuality?.label ?: "Качество",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(72.dp)
+                    )
+                }
+                DropdownMenu(
+                    expanded = qualityExpanded,
+                    onDismissRequest = { qualityExpanded = false }
+                ) {
+                    videoOptions.forEach { opt ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    buildString {
+                                        append(opt.label)
+                                        if (!opt.audioUrl.isNullOrBlank()) {
+                                            append(" · видео+звук")
+                                        }
+                                    }
+                                )
+                            },
+                            onClick = {
+                                qualityExpanded = false
+                                onSelectPlayback(opt)
+                            }
+                        )
+                    }
+                    if (audioOption != null) {
+                        DropdownMenuItem(
+                            text = { Text(audioOption.label) },
+                            onClick = {
+                                qualityExpanded = false
+                                onSelectPlayback(audioOption)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = onShowDownloadSheet) {
+                Icon(Icons.Default.Download, contentDescription = "Скачать")
+            }
+            Text(
+                text = "Скачать",
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(72.dp)
+            )
+        }
     }
 }
 

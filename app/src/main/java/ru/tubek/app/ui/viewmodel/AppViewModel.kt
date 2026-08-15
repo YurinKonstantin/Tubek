@@ -15,12 +15,9 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -117,11 +114,25 @@ data class DetailUiState(
     val betterConnectionAvailable: Boolean = false
 )
 
+data class ChannelUiState(
+    val isLoading: Boolean = false,
+    val channelId: String? = null,
+    val channelUrl: String? = null,
+    val title: String = "",
+    val avatarUrl: String? = null,
+    val isSubscribed: Boolean = false,
+    val videos: List<VideoItem> = emptyList(),
+    val shorts: List<VideoItem> = emptyList(),
+    val error: String? = null
+)
+
 data class SettingsUiState(
     val proxyEnabled: Boolean = true,
     val proxyTimeoutSec: Int = PreferencesRepository.DEFAULT_PROXY_TIMEOUT_SEC,
     val proxySource: ProxySource = ProxySource.ALL,
     val customProxyAddress: String = "",
+    val customProxyUsername: String = "",
+    val customProxyPassword: String = "",
     val customProxyMode: CustomProxyMode = CustomProxyMode.OFF,
     val customProxyError: String? = null,
     val preferredAudioLanguage: String = PreferencesRepository.AUDIO_LANGUAGE_AUTO,
@@ -178,6 +189,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var preferredAudioLanguagePref = PreferencesRepository.AUDIO_LANGUAGE_AUTO
     private var shortsActive = false
     private var shortsPlayJob: Job? = null
+    private var detailLoadGeneration = 0
+    private var channelLoadGeneration = 0
 
     private val _nowPlaying = MutableStateFlow<NowPlayingUiState?>(null)
     val nowPlaying: StateFlow<NowPlayingUiState?> = _nowPlaying.asStateFlow()
@@ -228,14 +241,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _detail = MutableStateFlow(DetailUiState())
     val detail: StateFlow<DetailUiState> = _detail.asStateFlow()
 
+    private val _channel = MutableStateFlow(ChannelUiState())
+    val channel: StateFlow<ChannelUiState> = _channel.asStateFlow()
+
     private val _settings = MutableStateFlow(SettingsUiState())
     val settings: StateFlow<SettingsUiState> = _settings.asStateFlow()
 
-    private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 16)
-    val toasts: SharedFlow<String> = _toasts.asSharedFlow()
+    private val _headerStatus = MutableStateFlow<String?>(null)
+    val headerStatus: StateFlow<String?> = _headerStatus.asStateFlow()
+    private var headerStatusClearJob: Job? = null
+    private var lastConnectionHeader: String? = null
 
     private var mediaControllerFuture: ListenableFuture<MediaController>? = null
-    /** Было ли уже успешное подключение в этой сессии (для тостов при переподключении). */
+    /** Было ли уже успешное подключение в этой сессии. */
     private var hadSuccessfulConnection = false
 
     init {
@@ -245,10 +263,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             effectiveCountryCode = detected
         )
         // Сразу предупреждаем — прогрев прокси уже идёт в TubekApp
-        _feed.value = _feed.value.copy(
-            isLoading = true,
-            connectionStatus = "Ищем рабочее подключение. Это может занять некоторое время…"
-        )
+        _feed.value = _feed.value.copy(isLoading = true)
+        setConnectionStatus("Ищем рабочее подключение. Это может занять некоторое время…")
         proxyPool.attachStats(proxyStats)
         viewModelScope.launch {
             proxyStats.loadIntoMemory()
@@ -257,6 +273,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             proxyStats.statsFlow.collect {
                 refreshProxyStatsSummary()
+            }
+        }
+        viewModelScope.launch {
+            subscriptions.collect { list ->
+                backfillMissingAvatars(list)
             }
         }
         playerController.setErrorListener { error ->
@@ -352,13 +373,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             preferences.customProxyAddress.collect { address ->
                 _settings.value = _settings.value.copy(customProxyAddress = address)
-                applyCustomProxySettings(address, _settings.value.customProxyMode)
+                applyCustomProxySettings(
+                    address = address,
+                    mode = _settings.value.customProxyMode,
+                    username = _settings.value.customProxyUsername,
+                    password = _settings.value.customProxyPassword
+                )
             }
         }
         viewModelScope.launch {
             preferences.customProxyMode.collect { mode ->
                 _settings.value = _settings.value.copy(customProxyMode = mode)
-                applyCustomProxySettings(_settings.value.customProxyAddress, mode)
+                applyCustomProxySettings(
+                    address = _settings.value.customProxyAddress,
+                    mode = mode,
+                    username = _settings.value.customProxyUsername,
+                    password = _settings.value.customProxyPassword
+                )
+            }
+        }
+        viewModelScope.launch {
+            preferences.customProxyUsername.collect { username ->
+                _settings.value = _settings.value.copy(customProxyUsername = username)
+            }
+        }
+        viewModelScope.launch {
+            preferences.customProxyPassword.collect { password ->
+                _settings.value = _settings.value.copy(customProxyPassword = password)
             }
         }
         viewModelScope.launch {
@@ -664,9 +705,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             maybeUpgradeProxyQuietly()
             savePlaybackPosition()
             playerController.setLooping(false)
+            val loadId = ++detailLoadGeneration
             _detail.value = DetailUiState(isLoading = true)
-            runWithProxyFallback { repository.resolve(urlOrId, preferredAudioLanguage()) }
+            runWithProxyFallback { repository.resolvePlayback(urlOrId, preferredAudioLanguage()) }
                 .onSuccess { details ->
+                    if (loadId != detailLoadGeneration) return@onSuccess
                     val playback = pickPlaybackOption(details.playbackOptions)
                     val subscribed = details.channelId?.let { channelId ->
                         isChannelSubscribed(channelId)
@@ -692,16 +735,41 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     if (playback != null && resumeAt == null) {
                         startPlayback(details, playback, startPositionMs = 0L)
                     } else if (resumeAt != null) {
-                        // Не автозапуск — ждём диалог; останавливаем предыдущее видео
                         playerController.pause()
                     }
+                    enrichDetailInBackground(loadId, details)
                 }
                 .onFailure { error ->
+                    if (loadId != detailLoadGeneration) return@onFailure
                     _detail.value = DetailUiState(
                         isLoading = false,
                         error = humanError(error)
                     )
                 }
+        }
+    }
+
+    private fun enrichDetailInBackground(loadId: Int, base: VideoDetails) {
+        viewModelScope.launch {
+            val cachedAvatar = base.channelId?.let { id ->
+                currentSubscriptions().firstOrNull { it.channelId == id }?.avatarUrl
+            } ?: base.channelAvatarUrl
+            val enriched = runCatching {
+                repository.enrichDetails(base, cachedChannelAvatarUrl = cachedAvatar)
+            }.getOrNull() ?: return@launch
+            if (loadId != detailLoadGeneration) return@launch
+            val current = _detail.value
+            if (current.details?.item?.id != enriched.item.id) return@launch
+            val subscribed = enriched.channelId?.let { channelId ->
+                isChannelSubscribed(channelId)
+            } == true
+            _detail.value = current.copy(
+                details = enriched,
+                isSubscribed = subscribed,
+                selectedDownload = current.selectedDownload
+                    ?: enriched.streams.firstOrNull { !it.isAudioOnly }
+                    ?: enriched.streams.firstOrNull()
+            )
         }
     }
 
@@ -789,9 +857,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             playbackProxyRetries++
             val position = playerController.currentPositionMs()
             setConnectionStatus("Видео не грузится. Ищем рабочий прокси…")
-            if (hadSuccessfulConnection) {
-                notifyToast("Видео не грузится. Ищем рабочий прокси…")
-            }
 
             // Сначала смена прокси (текущий уже не отдал поток), затем свежие URL
             proxyPool.switchToNext()
@@ -801,10 +866,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val result = withProxyFallback(
                 context = getApplication(),
                 maxTries = MAX_PROXY_TRIES,
-                onStatus = { msg ->
-                    setConnectionStatus(msg)
-                    if (hadSuccessfulConnection) notifyToast(msg)
-                }
+                onStatus = { msg -> setConnectionStatus(msg) }
             ) {
                 repository.resolve(session.videoUrl, preferredAudioLanguage())
             }
@@ -913,6 +975,59 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { videos ->
                     videos.firstOrNull()?.url?.let(onOpenVideo)
                 }
+        }
+    }
+
+    fun loadChannel(channelUrlOrId: String) {
+        viewModelScope.launch {
+            val loadId = ++channelLoadGeneration
+            _channel.value = ChannelUiState(isLoading = true)
+            runWithProxyFallback {
+                val info = repository.channelInfo(channelUrlOrId)
+                    ?: error("Канал не найден")
+                val videos = repository.channelVideos(info.url, limit = 30)
+                val shorts = repository.channelShorts(info.url, limit = 30)
+                Triple(info, videos, shorts)
+            }.onSuccess { (info, videos, shorts) ->
+                if (loadId != channelLoadGeneration) return@onSuccess
+                val subscribed = isChannelSubscribed(info.id)
+                _channel.value = ChannelUiState(
+                    isLoading = false,
+                    channelId = info.id,
+                    channelUrl = info.url,
+                    title = info.title,
+                    avatarUrl = info.avatarUrl,
+                    isSubscribed = subscribed,
+                    videos = videos,
+                    shorts = shorts
+                )
+            }.onFailure { error ->
+                if (loadId != channelLoadGeneration) return@onFailure
+                _channel.value = ChannelUiState(
+                    isLoading = false,
+                    error = humanError(error)
+                )
+            }
+        }
+    }
+
+    fun toggleChannelSubscribe() {
+        val state = _channel.value
+        val channelId = state.channelId ?: return
+        val channelUrl = state.channelUrl ?: return
+        viewModelScope.launch {
+            if (state.isSubscribed) {
+                unsubscribeChannel(channelId)
+                _channel.value = _channel.value.copy(isSubscribed = false)
+            } else {
+                subscribeChannel(
+                    channelId = channelId,
+                    name = state.title,
+                    channelUrl = channelUrl,
+                    avatarUrl = state.avatarUrl
+                )
+                _channel.value = _channel.value.copy(isSubscribed = true)
+            }
         }
     }
 
@@ -1038,12 +1153,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         channelUrl: String,
         avatarUrl: String?
     ) {
+        val resolvedAvatar = avatarUrl?.takeIf { it.isNotBlank() }
+            ?: runCatching { repository.channelInfo(channelUrl)?.avatarUrl }.getOrNull()
         if (_authState.value is AuthState.SignedIn) {
             val remote = repository.remoteSubscribe(channelId)
+            val entity = remote.toEntity().let { existing ->
+                if (existing.avatarUrl.isNullOrBlank() && !resolvedAvatar.isNullOrBlank()) {
+                    existing.copy(avatarUrl = resolvedAvatar)
+                } else {
+                    existing
+                }
+            }
             _remoteSubscriptions.value =
-                (_remoteSubscriptions.value + remote.toEntity()).distinctBy { it.channelId }
+                (_remoteSubscriptions.value + entity).distinctBy { it.channelId }
         } else {
-            subscriptionsRepo.subscribe(channelId, name, channelUrl, avatarUrl)
+            subscriptionsRepo.subscribe(channelId, name, channelUrl, resolvedAvatar)
         }
     }
 
@@ -1060,6 +1184,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _remoteSubscriptions.value.filter { it.channelId != channelId }
         } else {
             subscriptionsRepo.unsubscribe(channelId)
+        }
+    }
+
+    private var avatarBackfillRunning = false
+
+    private suspend fun backfillMissingAvatars(list: List<SubscriptionEntity>) {
+        if (avatarBackfillRunning) return
+        val missing = list.filter { it.avatarUrl.isNullOrBlank() }.take(8)
+        if (missing.isEmpty()) return
+        avatarBackfillRunning = true
+        try {
+            for (sub in missing) {
+                val url = runCatching {
+                    repository.channelInfo(sub.channelUrl.ifBlank { sub.channelId })?.avatarUrl
+                }.getOrNull() ?: continue
+                if (_authState.value is AuthState.SignedIn) {
+                    _remoteSubscriptions.value = _remoteSubscriptions.value.map { item ->
+                        if (item.channelId == sub.channelId) item.copy(avatarUrl = url) else item
+                    }
+                } else {
+                    subscriptionsRepo.subscribe(sub.channelId, sub.name, sub.channelUrl, url)
+                }
+            }
+        } finally {
+            avatarBackfillRunning = false
         }
     }
 
@@ -1182,7 +1331,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             preferences.setCustomProxyMode(mode)
             if (mode != CustomProxyMode.OFF &&
-                CustomProxyParser.parse(_settings.value.customProxyAddress) == null
+                CustomProxyParser.parse(
+                    _settings.value.customProxyAddress,
+                    _settings.value.customProxyUsername,
+                    _settings.value.customProxyPassword
+                ) == null
             ) {
                 _settings.value = _settings.value.copy(
                     customProxyError = "Укажите адрес вида host:port или socks5://host:port"
@@ -1191,11 +1344,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun applyCustomProxyFromSettings(address: String, mode: CustomProxyMode) {
+    fun applyCustomProxyFromSettings(
+        address: String,
+        mode: CustomProxyMode,
+        username: String = "",
+        password: String = ""
+    ) {
         viewModelScope.launch {
             preferences.setCustomProxyAddress(address)
             preferences.setCustomProxyMode(mode)
-            val endpoint = CustomProxyParser.parse(address)
+            preferences.setCustomProxyUsername(username)
+            preferences.setCustomProxyPassword(password)
+            val endpoint = CustomProxyParser.parse(address, username, password)
             if (mode != CustomProxyMode.OFF && endpoint == null) {
                 _settings.value = _settings.value.copy(
                     customProxyError = "Неверный адрес. Пример: 1.2.3.4:8080 или socks5://1.2.3.4:1080"
@@ -1203,7 +1363,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 notifyToast("Неверный адрес прокси")
                 return@launch
             }
-            _settings.value = _settings.value.copy(customProxyError = null)
+            _settings.value = _settings.value.copy(
+                customProxyError = null,
+                customProxyUsername = username.trim(),
+                customProxyPassword = password
+            )
             proxyPool.setCustomProxy(endpoint, mode)
             if (proxyPool.isEnabled()) {
                 proxyPool.resetSessionLimits()
@@ -1225,8 +1389,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun applyCustomProxySettings(address: String, mode: CustomProxyMode) {
-        val endpoint = CustomProxyParser.parse(address)
+    private fun applyCustomProxySettings(
+        address: String,
+        mode: CustomProxyMode,
+        username: String = "",
+        password: String = ""
+    ) {
+        val endpoint = CustomProxyParser.parse(address, username, password)
         val error = if (mode != CustomProxyMode.OFF && address.isNotBlank() && endpoint == null) {
             "Неверный адрес. Пример: 1.2.3.4:8080"
         } else {
@@ -1458,17 +1627,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         maxTries: Int = MAX_PROXY_TRIES,
         block: suspend () -> T
     ): Result<T> {
-        val toastOnStatus = hadSuccessfulConnection
         val result = withProxyFallback(
             context = getApplication(),
             maxTries = maxTries,
-            onStatus = { message ->
-                setConnectionStatus(message)
-                // При первом поиске — только баннер; тосты — при переподключении после сбоя
-                if (toastOnStatus) {
-                    notifyToast(message)
-                }
-            },
+            onStatus = { message -> setConnectionStatus(message) },
             block = block
         )
         if (result.isSuccess) {
@@ -1483,6 +1645,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun setConnectionStatus(message: String?) {
         _feed.value = _feed.value.copy(connectionStatus = message)
         _shorts.value = _shorts.value.copy(connectionStatus = message)
+        if (message != null) {
+            lastConnectionHeader = message
+            setHeaderStatus(message, sticky = true)
+        } else if (_headerStatus.value == lastConnectionHeader) {
+            lastConnectionHeader = null
+            clearHeaderStatusIfSticky()
+        } else {
+            lastConnectionHeader = null
+        }
+    }
+
+    private fun setHeaderStatus(message: String?, sticky: Boolean = false) {
+        headerStatusClearJob?.cancel()
+        _headerStatus.value = message
+        if (message != null && !sticky) {
+            headerStatusClearJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(4_500)
+                if (_headerStatus.value == message) {
+                    _headerStatus.value = null
+                }
+            }
+        }
+    }
+
+    private fun clearHeaderStatusIfSticky() {
+        headerStatusClearJob?.cancel()
+        _headerStatus.value = null
     }
 
     private fun refreshProxyStatsSummary() {
@@ -1504,7 +1693,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun notifyToast(message: String) {
-        _toasts.emit(message)
+        setHeaderStatus(message, sticky = false)
     }
 
     companion object {

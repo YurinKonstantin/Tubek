@@ -34,11 +34,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import ru.tubek.app.data.Countries
 import ru.tubek.app.data.PreferencesRepository
 import ru.tubek.app.proxy.CustomProxyMode
 import ru.tubek.app.proxy.ProxySource
+import ru.tubek.app.ui.components.AppBarTitleWithStatus
 import ru.tubek.app.ui.viewmodel.SettingsUiState
 import java.util.Locale
 
@@ -59,14 +61,21 @@ fun SettingsScreen(
     onProxyTimeoutSec: (Int) -> Unit,
     onProxySource: (ProxySource) -> Unit,
     onForceSwitchProxy: () -> Unit,
-    onApplyCustomProxy: (address: String, mode: CustomProxyMode) -> Unit,
+    onApplyCustomProxy: (address: String, mode: CustomProxyMode, username: String, password: String) -> Unit,
     onPreferredAudioLanguage: (String) -> Unit,
     onNotifyNewVideos: (Boolean) -> Unit,
     onAudioOnlyOnBackground: (Boolean) -> Unit,
-    onContentCountry: (String) -> Unit
+    onContentCountry: (String) -> Unit,
+    headerStatus: String? = null
 ) {
     var customAddressDraft by remember(state.customProxyAddress) {
         mutableStateOf(state.customProxyAddress)
+    }
+    var customUserDraft by remember(state.customProxyUsername) {
+        mutableStateOf(state.customProxyUsername)
+    }
+    var customPassDraft by remember(state.customProxyPassword) {
+        mutableStateOf(state.customProxyPassword)
     }
     var customModeDraft by remember(state.customProxyMode) {
         mutableStateOf(state.customProxyMode)
@@ -74,7 +83,12 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Настройки", fontWeight = FontWeight.Bold) },
+                title = {
+                    AppBarTitleWithStatus(
+                        title = "Настройки",
+                        status = headerStatus
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
@@ -160,7 +174,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(16.dp))
             Text("Свой прокси", fontWeight = FontWeight.SemiBold)
             Text(
-                text = "host:port, http://host:port или socks5://host:port",
+                text = "host:port, user:pass@host:port, http://… или socks5://…",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                 modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
@@ -177,6 +191,25 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = customUserDraft,
+                onValueChange = { customUserDraft = it },
+                enabled = state.proxyEnabled,
+                label = { Text("Логин (если нужен)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = customPassDraft,
+                onValueChange = { customPassDraft = it },
+                enabled = state.proxyEnabled,
+                label = { Text("Пароль") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
             SettingsDropdown(
                 label = "Режим своего прокси",
                 selectedLabel = customModeDraft.labelRu,
@@ -186,7 +219,14 @@ fun SettingsScreen(
             )
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
-                onClick = { onApplyCustomProxy(customAddressDraft, customModeDraft) },
+                onClick = {
+                    onApplyCustomProxy(
+                        customAddressDraft,
+                        customModeDraft,
+                        customUserDraft,
+                        customPassDraft
+                    )
+                },
                 enabled = state.proxyEnabled,
                 modifier = Modifier.fillMaxWidth()
             ) {

@@ -45,6 +45,7 @@ import ru.tubek.app.data.DownloadRecord
 import ru.tubek.app.data.SubscriptionEntity
 import ru.tubek.app.data.WatchHistoryEntity
 import ru.tubek.app.ui.components.MiniPlayerBar
+import ru.tubek.app.ui.screens.ChannelScreen
 import ru.tubek.app.ui.screens.ConsentScreen
 import ru.tubek.app.ui.screens.DownloadsHelpScreen
 import ru.tubek.app.ui.screens.FeedScreen
@@ -61,6 +62,7 @@ import ru.tubek.app.ui.viewmodel.AuthState
 import ru.tubek.app.ui.viewmodel.FeedUiState
 import ru.tubek.app.ui.viewmodel.NowPlayingUiState
 import ru.tubek.app.ui.viewmodel.SearchUiState
+import ru.tubek.app.ui.viewmodel.SettingsUiState
 import ru.tubek.app.ui.viewmodel.ShortsUiState
 import ru.tubek.app.youtube.SignInPrepareResult
 import ru.tubek.app.youtube.YoutubeAuthManager
@@ -79,12 +81,18 @@ object Routes {
     const val History = "history"
     const val Settings = "settings"
     const val Detail = "detail/{url}"
+    const val Channel = "channel/{channel}"
     const val Legal = "legal/{type}"
     const val DownloadsHelp = "downloads_help"
 
     fun detail(url: String): String {
         val encoded = URLEncoder.encode(url, StandardCharsets.UTF_8.toString())
         return "detail/$encoded"
+    }
+
+    fun channel(channelUrlOrId: String): String {
+        val encoded = URLEncoder.encode(channelUrlOrId, StandardCharsets.UTF_8.toString())
+        return "channel/$encoded"
     }
 
     fun legal(type: String): String = "legal/$type"
@@ -114,12 +122,14 @@ fun TubekNavHost(
     val start = if (consentAccepted) Routes.Main else Routes.Consent
     val searchState by viewModel.search.collectAsStateWithLifecycle()
     val detailState by viewModel.detail.collectAsStateWithLifecycle()
+    val channelState by viewModel.channel.collectAsStateWithLifecycle()
     val feedState by viewModel.feed.collectAsStateWithLifecycle()
     val shortsState by viewModel.shorts.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val watchHistory by viewModel.watchHistory.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val headerStatus by viewModel.headerStatus.collectAsStateWithLifecycle()
     val authState by viewModel.authState.collectAsStateWithLifecycle()
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -190,12 +200,6 @@ fun TubekNavHost(
         }
     }
 
-    LaunchedEffect(Unit) {
-        viewModel.toasts.collect { message ->
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-        }
-    }
-
     NavHost(navController = rootNav, startDestination = start) {
         composable(Routes.Consent) {
             ConsentScreen(
@@ -219,6 +223,8 @@ fun TubekNavHost(
                 subscriptions = subscriptions,
                 authState = authState,
                 nowPlaying = nowPlaying,
+                settings = settings,
+                headerStatus = headerStatus,
                 onRefreshFeed = viewModel::loadFeed,
                 onRefreshShorts = viewModel::loadShorts,
                 onShortsPageChanged = viewModel::onShortsPageChanged,
@@ -246,10 +252,9 @@ fun TubekNavHost(
                 onToggleNotify = { sub, enabled -> viewModel.setChannelNotify(sub.channelId, enabled) },
                 onUnsubscribe = { viewModel.unsubscribe(it.channelId) },
                 onOpenChannel = { sub ->
-                    viewModel.openSubscriptionFeed(sub.channelUrl) { url ->
-                        rootNav.navigate(Routes.detail(url))
-                    }
+                    rootNav.navigate(Routes.channel(sub.channelUrl.ifBlank { sub.channelId }))
                 },
+                onForceSwitchProxy = viewModel::forceSwitchProxy,
                 onLoginClick = {
                     if (authState is AuthState.SignedIn) {
                         viewModel.signOut()
@@ -287,7 +292,27 @@ fun TubekNavHost(
                 },
                 onContinueWatching = viewModel::continueWatching,
                 onStartFromBeginning = viewModel::startFromBeginning,
-                onApplyBetterConnection = viewModel::applyBetterConnection
+                onApplyBetterConnection = viewModel::applyBetterConnection,
+                onOpenChannel = { channelUrlOrId ->
+                    rootNav.navigate(Routes.channel(channelUrlOrId))
+                }
+            )
+        }
+
+        composable(
+            route = Routes.Channel,
+            arguments = listOf(navArgument("channel") { type = NavType.StringType })
+        ) { entry ->
+            val encoded = entry.arguments?.getString("channel").orEmpty()
+            val channelKey = URLDecoder.decode(encoded, StandardCharsets.UTF_8.toString())
+            LaunchedEffect(channelKey) {
+                viewModel.loadChannel(channelKey)
+            }
+            ChannelScreen(
+                state = channelState,
+                onBack = { rootNav.popBackStack() },
+                onToggleSubscribe = viewModel::toggleChannelSubscribe,
+                onOpenVideo = { item -> rootNav.navigate(Routes.detail(item.url)) }
             )
         }
 
@@ -320,6 +345,7 @@ fun TubekNavHost(
             Box(modifier = Modifier.fillMaxSize()) {
                 SettingsScreen(
                     state = settings,
+                    headerStatus = headerStatus,
                     onBack = { rootNav.popBackStack() },
                     onProxyEnabled = viewModel::setProxyEnabled,
                     onProxyTimeoutSec = viewModel::setProxyTimeoutSec,
@@ -367,6 +393,8 @@ private fun MainShell(
     subscriptions: List<SubscriptionEntity>,
     authState: AuthState,
     nowPlaying: NowPlayingUiState?,
+    settings: SettingsUiState,
+    headerStatus: String?,
     onRefreshFeed: () -> Unit,
     onRefreshShorts: () -> Unit,
     onShortsPageChanged: (Int) -> Unit,
@@ -392,6 +420,7 @@ private fun MainShell(
     onToggleNotify: (SubscriptionEntity, Boolean) -> Unit,
     onUnsubscribe: (SubscriptionEntity) -> Unit,
     onOpenChannel: (SubscriptionEntity) -> Unit,
+    onForceSwitchProxy: () -> Unit,
     onLoginClick: () -> Unit
 ) {
     val tabNav = rememberNavController()
@@ -455,7 +484,11 @@ private fun MainShell(
                         tabNav.navigate(Routes.Search) {
                             launchSingleTop = true
                         }
-                    }
+                    },
+                    proxyEnabled = settings.proxyEnabled,
+                    isSwitchingProxy = settings.isSwitchingProxy,
+                    onForceSwitchProxy = onForceSwitchProxy,
+                    headerStatus = headerStatus
                 )
             }
             composable(Routes.Shorts) {
@@ -475,7 +508,11 @@ private fun MainShell(
                     subscriptions = subscriptions,
                     onOpenChannel = onOpenChannel,
                     onToggleNotify = onToggleNotify,
-                    onUnsubscribe = onUnsubscribe
+                    onUnsubscribe = onUnsubscribe,
+                    proxyEnabled = settings.proxyEnabled,
+                    isSwitchingProxy = settings.isSwitchingProxy,
+                    onForceSwitchProxy = onForceSwitchProxy,
+                    headerStatus = headerStatus
                 )
             }
             composable(Routes.Search) {
@@ -503,7 +540,11 @@ private fun MainShell(
                     onClearDownloads = onClearDownloads,
                     onOpenLegal = onOpenLegal,
                     onOpenHelp = onOpenHelp,
-                    onLoginClick = onLoginClick
+                    onLoginClick = onLoginClick,
+                    proxyEnabled = settings.proxyEnabled,
+                    isSwitchingProxy = settings.isSwitchingProxy,
+                    onForceSwitchProxy = onForceSwitchProxy,
+                    headerStatus = headerStatus
                 )
             }
         }

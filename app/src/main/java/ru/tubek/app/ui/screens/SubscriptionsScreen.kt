@@ -1,5 +1,6 @@
 package ru.tubek.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,11 +30,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import ru.tubek.app.data.SubscriptionEntity
+import ru.tubek.app.ui.components.AppBarTitleWithStatus
+import ru.tubek.app.ui.components.ForceSwitchProxyButton
+import ru.tubek.app.ui.components.ProxiedAsyncImage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,11 +43,29 @@ fun SubscriptionsScreen(
     subscriptions: List<SubscriptionEntity>,
     onOpenChannel: (SubscriptionEntity) -> Unit,
     onToggleNotify: (SubscriptionEntity, Boolean) -> Unit,
-    onUnsubscribe: (SubscriptionEntity) -> Unit
+    onUnsubscribe: (SubscriptionEntity) -> Unit,
+    proxyEnabled: Boolean = false,
+    isSwitchingProxy: Boolean = false,
+    onForceSwitchProxy: () -> Unit = {},
+    headerStatus: String? = null
 ) {
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Подписки", fontWeight = FontWeight.Bold) })
+            TopAppBar(
+                title = {
+                    AppBarTitleWithStatus(
+                        title = "Подписки",
+                        status = headerStatus
+                    )
+                },
+                actions = {
+                    ForceSwitchProxyButton(
+                        enabled = proxyEnabled,
+                        switching = isSwitchingProxy,
+                        onClick = onForceSwitchProxy
+                    )
+                }
+            )
         }
     ) { padding ->
         if (subscriptions.isEmpty()) {
@@ -77,14 +97,31 @@ fun SubscriptionsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        AsyncImage(
-                            model = sub.avatarUrl,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                        )
+                        if (!sub.avatarUrl.isNullOrBlank()) {
+                            ProxiedAsyncImage(
+                                url = sub.avatarUrl,
+                                contentDescription = sub.name,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = sub.name.take(1).uppercase().ifBlank { "C" },
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(sub.name, fontWeight = FontWeight.SemiBold)
                             Text(

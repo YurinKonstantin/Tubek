@@ -41,7 +41,9 @@ class TubekApp : Application() {
         pool.setSource(prefs.proxySource.first())
         val address = prefs.customProxyAddress.first()
         val mode = prefs.customProxyMode.first()
-        pool.setCustomProxy(CustomProxyParser.parse(address), mode)
+        val username = prefs.customProxyUsername.first()
+        val password = prefs.customProxyPassword.first()
+        pool.setCustomProxy(CustomProxyParser.parse(address, username, password), mode)
         if (!enabled) return
         pool.ensureReady()
         YoutubeService.rebuildProxyClients(this)

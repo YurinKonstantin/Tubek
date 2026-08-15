@@ -114,7 +114,10 @@ class ProxyPool(
     }
 
     fun setCustomProxy(endpoint: ProxyEndpoint?, mode: CustomProxyMode) {
-        val changed = customEndpoint?.key != endpoint?.key || customMode != mode
+        val changed = customEndpoint?.key != endpoint?.key ||
+            customEndpoint?.username != endpoint?.username ||
+            customEndpoint?.password != endpoint?.password ||
+            customMode != mode
         customEndpoint = endpoint
         customMode = mode
         if (!changed) return
@@ -520,14 +523,27 @@ class ProxyPool(
         val sec = timeoutSec.coerceAtLeast(1L)
         return try {
             val started = System.nanoTime()
-            val client = OkHttpClient.Builder()
+            val builder = OkHttpClient.Builder()
                 .proxy(endpoint.toJavaProxy())
                 .connectTimeout(sec, TimeUnit.SECONDS)
                 .readTimeout(sec, TimeUnit.SECONDS)
                 .writeTimeout(sec, TimeUnit.SECONDS)
                 .callTimeout(sec, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(false)
-                .build()
+            val user = endpoint.username?.takeIf { it.isNotBlank() }
+            if (user != null && endpoint.type == ProxyEndpoint.Type.HTTP) {
+                val credential = okhttp3.Credentials.basic(user, endpoint.password.orEmpty())
+                builder.proxyAuthenticator { _, response ->
+                    if (response.request.header("Proxy-Authorization") != null) {
+                        null
+                    } else {
+                        response.request.newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build()
+                    }
+                }
+            }
+            val client = builder.build()
             val request = Request.Builder()
                 .url("https://www.youtube.com/generate_204")
                 .header("User-Agent", "Tubik/1.0")

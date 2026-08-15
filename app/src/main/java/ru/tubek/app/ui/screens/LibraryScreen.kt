@@ -42,6 +42,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import ru.tubek.app.data.DownloadRecord
+import ru.tubek.app.ui.components.AppBarTitleWithStatus
+import ru.tubek.app.ui.components.ForceSwitchProxyButton
 import ru.tubek.app.ui.viewmodel.AuthState
 import java.io.File
 
@@ -57,13 +59,31 @@ fun LibraryScreen(
     onClearDownloads: () -> Unit,
     onOpenLegal: () -> Unit,
     onOpenHelp: () -> Unit,
-    onLoginClick: () -> Unit
+    onLoginClick: () -> Unit,
+    proxyEnabled: Boolean = false,
+    isSwitchingProxy: Boolean = false,
+    onForceSwitchProxy: () -> Unit = {},
+    headerStatus: String? = null
 ) {
     val context = LocalContext.current
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Библиотека", fontWeight = FontWeight.Bold) })
+            TopAppBar(
+                title = {
+                    AppBarTitleWithStatus(
+                        title = "Библиотека",
+                        status = headerStatus
+                    )
+                },
+                actions = {
+                    ForceSwitchProxyButton(
+                        enabled = proxyEnabled,
+                        switching = isSwitchingProxy,
+                        onClick = onForceSwitchProxy
+                    )
+                }
+            )
         }
     ) { padding ->
         LazyColumn(
