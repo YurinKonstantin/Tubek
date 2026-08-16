@@ -220,6 +220,7 @@ fun TubekNavHost(
                 shortsState = shortsState,
                 searchState = searchState,
                 downloads = downloads,
+                watchHistory = watchHistory,
                 subscriptions = subscriptions,
                 authState = authState,
                 nowPlaying = nowPlaying,
@@ -390,6 +391,7 @@ private fun MainShell(
     shortsState: ShortsUiState,
     searchState: SearchUiState,
     downloads: List<DownloadRecord>,
+    watchHistory: List<WatchHistoryEntity>,
     subscriptions: List<SubscriptionEntity>,
     authState: AuthState,
     nowPlaying: NowPlayingUiState?,
@@ -428,7 +430,7 @@ private fun MainShell(
         TabItem(Routes.Feed, "Главная", Icons.Default.Home),
         TabItem(Routes.Shorts, "Shorts", Icons.Default.Videocam),
         TabItem(Routes.Subscriptions, "Подписки", Icons.Default.Subscriptions),
-        TabItem(Routes.Library, "Библиотека", Icons.Default.VideoLibrary)
+        TabItem(Routes.Library, "Вы", Icons.Default.VideoLibrary)
     )
     val backStack by tabNav.currentBackStackEntryAsState()
     val currentRoute = backStack?.destination?.route
@@ -473,7 +475,9 @@ private fun MainShell(
         NavHost(
             navController = tabNav,
             startDestination = Routes.Feed,
-            modifier = Modifier.padding(padding)
+            // Only pad for bottom nav / mini-player. Top insets belong to each
+            // screen TopAppBar — otherwise the title sits too far below the status bar.
+            modifier = Modifier.padding(bottom = padding.calculateBottomPadding())
         ) {
             composable(Routes.Feed) {
                 FeedScreen(
@@ -530,11 +534,15 @@ private fun MainShell(
             composable(Routes.Library) {
                 LibraryScreen(
                     downloads = downloads,
+                    recentHistory = watchHistory.take(20),
                     authState = authState,
                     onOpenHistory = onOpenHistory,
                     onOpenSettings = onOpenSettings,
                     onOpenVideoPage = { record ->
                         if (record.videoUrl.isNotBlank()) onOpenVideo(record.videoUrl)
+                    },
+                    onOpenHistoryVideo = { entry ->
+                        onOpenVideo(entry.videoUrl)
                     },
                     onDelete = onDeleteDownload,
                     onClearDownloads = onClearDownloads,

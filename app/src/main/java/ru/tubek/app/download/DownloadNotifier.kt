@@ -10,7 +10,7 @@ object DownloadNotifier {
 
     fun showProgress(context: Context, id: Int, title: String, progress: Int) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_tubek)
             .setContentTitle("Скачивание")
             .setContentText(title)
             .setOnlyAlertOnce(true)
@@ -22,7 +22,7 @@ object DownloadNotifier {
 
     fun showCompleted(context: Context, id: Int, title: String, path: String) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_tubek)
             .setContentTitle("Готово")
             .setContentText("$title\n$path")
             .setStyle(NotificationCompat.BigTextStyle().bigText("$title\nСохранено: $path"))
@@ -34,7 +34,7 @@ object DownloadNotifier {
 
     fun showFailed(context: Context, id: Int, title: String, error: String) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_tubek)
             .setContentTitle("Ошибка загрузки")
             .setContentText(title)
             .setStyle(NotificationCompat.BigTextStyle().bigText(error))

@@ -1,0 +1,11 @@
+## Скопируйте в local.properties и заполните значения.
+sdk.dir=C\:\\Users\\YOU\\AppData\\Local\\Android\\Sdk
+
+youtube.api.key=YOUR_API_KEY
+
+# Web application Client ID (обязателен для входа через Google)
+youtube.oauth.web.client.id=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+
+# Опционально — переопределение по типу сборки (иначе используется ключ выше)
+# youtube.oauth.web.client.id.debug=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+# youtube.oauth.web.client.id.release=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com

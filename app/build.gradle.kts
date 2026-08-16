@@ -17,6 +17,12 @@ val localProperties = Properties().apply {
 fun propOrEmpty(key: String): String =
     localProperties.getProperty(key, "").orEmpty().replace("\"", "\\\"")
 
+/** Web Client ID: build-type override, иначе общий youtube.oauth.web.client.id */
+fun oauthWebClientId(buildType: String): String {
+    val override = propOrEmpty("youtube.oauth.web.client.id.$buildType")
+    return override.ifBlank { propOrEmpty("youtube.oauth.web.client.id") }
+}
+
 android {
     namespace = "ru.tubek.app"
     compileSdk = 35
@@ -45,10 +51,20 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField(
+                "String",
+                "YOUTUBE_OAUTH_WEB_CLIENT_ID",
+                "\"${oauthWebClientId("release")}\""
+            )
         }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField(
+                "String",
+                "YOUTUBE_OAUTH_WEB_CLIENT_ID",
+                "\"${oauthWebClientId("debug")}\""
+            )
         }
     }
 

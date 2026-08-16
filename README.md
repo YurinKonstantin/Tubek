@@ -20,13 +20,23 @@ Android-приложение для поиска, просмотра и скач
    youtube.api.key=YOUR_API_KEY
    ```
 3. Настройте OAuth consent screen (scopes `youtube` и `youtube.readonly`).
-4. Создайте OAuth clients:
-   - **Android** — package `ru.tubek.app` / `ru.tubek.app.debug` + SHA-1
-   - **Web application** — Client ID для AuthorizationClient
-5. Web Client ID в `local.properties`:
+4. Создайте OAuth clients в одном Google Cloud проекте:
+   - **Web application** — его Client ID кладётся в `local.properties` (см. ниже).
+   - **Android (debug)** — package `ru.tubek.app.debug` + SHA-1 debug.keystore  
+     (Android Client ID **не** пишется в приложение, только в консоли).
+   - **Android (release)** — package `ru.tubek.app` + SHA-1 release keystore.
+5. В `local.properties` (шаблон: `local.properties.example`):
    ```properties
+   youtube.api.key=YOUR_API_KEY
+   # общий Web Client ID
    youtube.oauth.web.client.id=XXXX.apps.googleusercontent.com
+   # опционально отдельно для debug / release:
+   # youtube.oauth.web.client.id.debug=XXXX.apps.googleusercontent.com
+   # youtube.oauth.web.client.id.release=XXXX.apps.googleusercontent.com
    ```
+
+Если debug-сборка не логинится: чаще всего в консоли нет Android-клиента для
+`ru.tubek.app.debug` + debug SHA-1 (не путайте Android Client ID с Web Client ID).
 
 SHA-1 debug:
 ```bash
@@ -50,7 +60,10 @@ Release keystore (если создан): `keystore/tubek-release.keystore` (п�
    - Выберите `Tubek/.jdk/jdk-17.0.20+8`
 4. Заполните `local.properties` (sdk.dir + youtube.*).
 5. **File → Sync Project with Gradle Files**
-6. Подключите устройство/эмулятор и нажмите Run.
+6. В списке Run/Debug Configurations выберите **Tubek Debug** или **Tubek Release**
+   (файлы в `.idea/runConfigurations/`). Для Release также в **Build Variants**
+   выберите `release` у модуля `app`.
+7. Подключите устройство/эмулятор и нажмите Run.
 
 ## Сборка релиза для RuStore
 

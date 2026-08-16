@@ -1,29 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Tunnel-T brand mark: T as proxy tube + signal arcs -->
+<!-- Tubek: video player + play + download -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Safe zone ~66%: content roughly 22..86 -->
+    <!-- Video screen (bottom ~70) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M28,30h52c1.7,0 3,1.3 3,3v6c0,1.7 -1.3,3 -3,3H63v28c0,4.4 -3.6,8 -8,8h-2c-4.4,0 -8,-3.6 -8,-8V42H28c-1.7,0 -3,-1.3 -3,-3v-6c0,-1.7 1.3,-3 3,-3z" />
-    <!-- Inner tube opening -->
+        android:pathData="M28,28h52c5.5,0 10,4.5 10,10v22c0,5.5 -4.5,10 -10,10H28c-5.5,0 -10,-4.5 -10,-10V38c0,-5.5 4.5,-10 10,-10z" />
+    <!-- Play -->
     <path
         android:fillColor="#E53935"
-        android:pathData="M49,44h10v22c0,1.7 -1.3,3 -3,3h-4c-1.7,0 -3,-1.3 -3,-3V44z" />
-    <!-- Signal arcs at base -->
+        android:pathData="M45,36v24l22,-12z" />
+    <!-- Download under player -->
     <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.5"
-        android:strokeLineCap="round"
-        android:pathData="M40,78c4.5,4 10,6 14,6s9.5,-2 14,-6" />
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="2.5"
-        android:strokeLineCap="round"
-        android:pathData="M44,84c3,2.5 6.5,4 10,4s7,-1.5 10,-4" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,74h8v7h6L54,93 44,81h6z" />
 </vector>
