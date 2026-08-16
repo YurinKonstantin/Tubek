@@ -26,9 +26,11 @@ class TubekApp : Application() {
         val pool = ProxyPool.get()
         pool.attachStats(stats)
         pool.attachScope(appScope)
-        appScope.launch { stats.loadIntoMemory() }
-        // Сразу начинаем подбор прокси — не ждём открытия ленты
-        appScope.launch { warmUpProxy(pool) }
+        // Статистика (в т.ч. последний удачный прокси) должна быть в памяти до прогрева
+        appScope.launch {
+            stats.loadIntoMemory()
+            warmUpProxy(pool)
+        }
         createNotificationChannels()
         NewVideoCheckWorker.enqueue(this)
     }

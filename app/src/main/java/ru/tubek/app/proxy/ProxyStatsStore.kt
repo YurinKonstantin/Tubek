@@ -66,8 +66,11 @@ class ProxyStatsStore(private val context: Context) {
 
     private val countryKey = stringPreferencesKey("country_stats_v1")
     private val endpointKey = stringPreferencesKey("endpoint_stats_v1")
+    private val lastGoodKey = stringPreferencesKey("last_good_proxy_v1")
     private val countryMemory = ConcurrentHashMap<String, CountryProxyStat>()
     private val endpointMemory = ConcurrentHashMap<String, EndpointProxyStat>()
+    @Volatile
+    private var lastGoodEndpoint: ProxyEndpoint? = null
 
     val statsFlow: Flow<List<CountryProxyStat>> = context.proxyStatsStore.data.map { prefs ->
         parseCountries(prefs[countryKey]).values.sortedByDescending { it.score }
@@ -79,6 +82,7 @@ class ProxyStatsStore(private val context: Context) {
         countryMemory.putAll(parseCountries(prefs[countryKey]))
         endpointMemory.clear()
         endpointMemory.putAll(parseEndpoints(prefs[endpointKey]))
+        lastGoodEndpoint = parseLastGood(prefs[lastGoodKey])
     }
 
     fun snapshot(): List<CountryProxyStat> =
@@ -105,9 +109,35 @@ class ProxyStatsStore(private val context: Context) {
             .take(limit)
             .map { it.toEndpoint() }
 
+    /** Последний успешно использованный прокси (для быстрого старта). */
+    fun lastGoodEndpoint(): ProxyEndpoint? = lastGoodEndpoint
+
     suspend fun recordSuccess(endpoint: ProxyEndpoint, latencyMs: Long) {
         recordCountrySuccess(endpoint.countryCode, latencyMs)
         recordEndpointSuccess(endpoint, latencyMs)
+        saveLastGood(endpoint)
+    }
+
+    suspend fun saveLastGood(endpoint: ProxyEndpoint) {
+        // Свой прокси хранится отдельно в настройках; здесь — автосписок.
+        if (endpoint.source == "custom") return
+        lastGoodEndpoint = endpoint
+        val json = JSONObject()
+            .put("host", endpoint.host)
+            .put("port", endpoint.port)
+            .put("type", endpoint.type.name)
+            .put("countryCode", endpoint.countryCode ?: "")
+            .put("source", endpoint.source)
+        context.proxyStatsStore.edit { prefs ->
+            prefs[lastGoodKey] = json.toString()
+        }
+    }
+
+    suspend fun clearLastGood() {
+        lastGoodEndpoint = null
+        context.proxyStatsStore.edit { prefs ->
+            prefs.remove(lastGoodKey)
+        }
     }
 
     private suspend fun recordCountrySuccess(countryCode: String?, latencyMs: Long) {
@@ -225,6 +255,27 @@ class ProxyStatsStore(private val context: Context) {
             }
             map
         }.getOrDefault(emptyMap())
+    }
+
+    private fun parseLastGood(raw: String?): ProxyEndpoint? {
+        if (raw.isNullOrBlank()) return null
+        return runCatching {
+            val obj = JSONObject(raw)
+            val host = obj.optString("host").trim()
+            val port = obj.optInt("port", -1)
+            if (host.isBlank() || port !in 1..65535) return null
+            val type = when (obj.optString("type").uppercase(Locale.US)) {
+                "SOCKS5", "SOCKS" -> ProxyEndpoint.Type.SOCKS5
+                else -> ProxyEndpoint.Type.HTTP
+            }
+            ProxyEndpoint(
+                host = host,
+                port = port,
+                type = type,
+                source = obj.optString("source").ifBlank { "last_good" },
+                countryCode = obj.optString("countryCode").takeIf { it.length == 2 }
+            )
+        }.getOrNull()
     }
 
     companion object {

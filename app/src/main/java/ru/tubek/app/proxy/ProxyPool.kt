@@ -206,12 +206,33 @@ class ProxyPool(
         if (customMode == CustomProxyMode.WITH_AUTO) {
             probeCustomPreferred()?.let { return it }
         }
+        // Быстрый старт: сначала последний удачный прокси, до загрузки списков
+        tryLastGoodProxy()?.let { return it }
         ensureCandidatesFromAllSources()
         return rotateParallel(
             maxProbes = MAX_PROBES_PER_SWITCH,
             concurrency = PARALLEL_PROBES,
             timeoutSec = FAST_PROBE_TIMEOUT_SEC
         )
+    }
+
+    /**
+     * Проверить сохранённый последний рабочий прокси до скачивания свежих списков.
+     */
+    private suspend fun tryLastGoodProxy(): ProxyEndpoint? {
+        val last = statsStore?.lastGoodEndpoint() ?: return null
+        if (last.source == "custom") return null
+        val latency = withContext(Dispatchers.IO) {
+            probeLatencyMs(last, FAST_PROBE_TIMEOUT_SEC)
+        } ?: run {
+            // Мёртвый — не держим как «последний удачный»
+            runCatching { statsStore?.clearLastGood() }
+            return null
+        }
+        setActive(last, latency)
+        statsStore?.recordSuccess(last, latency)
+        scheduleBackgroundScan(excludeKeys = setOf(last.key))
+        return last
     }
 
     suspend fun forceRefreshListAndRotate(): ProxyEndpoint? {
