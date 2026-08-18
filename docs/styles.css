@@ -1,0 +1,142 @@
+:root {
+  --bg: #0f0f0f;
+  --surface: #1a1a1a;
+  --text: #f5f5f5;
+  --muted: #b3b3b3;
+  --red: #e53935;
+  --red-dark: #b71c1c;
+  --line: #2a2a2a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  line-height: 1.55;
+}
+
+a { color: var(--red); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.wrap {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+header {
+  border-bottom: 1px solid var(--line);
+  background: rgba(15, 15, 15, 0.92);
+  position: sticky;
+  top: 0;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 20px;
+}
+
+.brand img {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+
+.nav-links { display: flex; gap: 18px; }
+
+.hero {
+  padding: 56px 0 28px;
+}
+
+.hero h1 {
+  margin: 0 0 12px;
+  font-size: 42px;
+  letter-spacing: -0.03em;
+}
+
+.lead {
+  color: var(--muted);
+  font-size: 18px;
+  max-width: 640px;
+  margin: 0;
+}
+
+.badge {
+  display: inline-block;
+  background: #2a1212;
+  color: #ff8a80;
+  border: 1px solid #4a1c1c;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  padding: 12px 0 40px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.note {
+  background: #171717;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  color: var(--muted);
+  margin-bottom: 48px;
+}
+
+.legal {
+  padding: 36px 0 64px;
+  white-space: pre-wrap;
+}
+
+.legal h1 { margin-top: 0; }
+
+footer {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  padding: 20px 0 32px;
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .hero h1 { font-size: 32px; }
+  .nav-links { font-size: 14px; }
+}
